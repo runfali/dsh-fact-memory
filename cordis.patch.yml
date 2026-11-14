@@ -1,0 +1,11 @@
+# dsh-fact-memory — bundle patch layer
+#
+# One row, standard profile bundle: `dsh plugin --profile <p> add /path/to/dsh-fact-memory`
+# installs and mounts it without hand-editing this file.
+#
+# `id` is the settings namespace AND the name the plugin page prints next to the
+# module; keep the three (package, row id, namespace) identical or saved settings
+# end up under a namespace nothing reads.
+- insert:
+    - id: dsh-fact-memory
+      name: 'dsh-fact-memory'
