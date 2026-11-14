@@ -5205,7 +5205,6 @@ window.__ModuleLoader__.load({
 
     function createSurfaceController(ctx, page) {
       const drawer = createStore({
-        open: false,
         sessionId: "",
         sinceSeq: 0,
         facts: [],
@@ -5361,7 +5360,7 @@ window.__ModuleLoader__.load({
         const sessionId = String(options?.sessionId ?? "");
         const sinceSeq = Number(options?.sinceSeq ?? 0) || 0;
         lastRequest = { sessionId, sinceSeq };
-        drawer.set({ open: true, sessionId, sinceSeq, facts: [], lastRun: null, loading: true, error: null });
+        drawer.set({ sessionId, sinceSeq, facts: [], lastRun: null, loading: true, error: null });
         const params = { sessionId, sinceSeq };
         // A tab can only be placed in a mounted pane, so reveal the right column
         // first and retry once the pane has adopted this session. Both calls are
@@ -5409,12 +5408,6 @@ window.__ModuleLoader__.load({
         cancelTurn,
         refreshSessions,
         openDrawer,
-        closeDrawer: () => {
-          drawerRequest += 1;
-          if (drawerPlaceTimer) clearTimeout(drawerPlaceTimer);
-          drawerPlaceTimer = null;
-          drawer.patch({ open: false });
-        },
         openInPanel,
         // The drawer, the turn cards and the sidebar marks all cache what the
         // store said; a wipe makes every one of those numbers a lie.
@@ -5467,7 +5460,7 @@ window.__ModuleLoader__.load({
     }
 
     function MemoryDrawer(props) {
-      const { t, zone, useDrawer, close, openFact, resume } = props;
+      const { t, zone, useDrawer, openFact, resume } = props;
       const state = useDrawer((snapshot) => snapshot);
       const facts = state.facts || [];
       useEffect(() => {
@@ -5485,13 +5478,6 @@ window.__ModuleLoader__.load({
                   jsx("strong", { children: t("drawer.title") }),
                   jsx("span", { className: "FM_drSub", children: t("drawer.subtitle") }),
                 ],
-              }),
-              jsx("button", {
-                className: "FM_pgIconBtn",
-                type: "button",
-                title: t("page.close"),
-                onClick: () => close(),
-                children: jsx(Glyph, { kind: "close", size: 14 }),
               }),
             ],
           }),
@@ -6672,7 +6658,6 @@ window.__ModuleLoader__.load({
                     locale: NS,
                     inject: () => ({
                       hooks: { drawer: surfaces.drawer },
-                      close: surfaces.closeDrawer,
                       openFact: surfaces.openInPanel,
                       resume: surfaces.resumeDrawer,
                     }),
