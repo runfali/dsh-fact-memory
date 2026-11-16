@@ -162,6 +162,7 @@ test("apply registers the three tools, the context and the routes", () => {
       "/api/fact-memory/entity",
       "/api/fact-memory/export",
       "/api/fact-memory/extract",
+      "/api/fact-memory/extract-retry",
       "/api/fact-memory/extract-run",
       "/api/fact-memory/fact",
       "/api/fact-memory/fact-expire",

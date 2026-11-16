@@ -7,7 +7,7 @@
  * the exact + BM25 path and MUST report that vector recall was not used; nothing
  * here invents a local model to keep a switch lit.
  */
-import { sha256, oneLine } from "./util.js";
+import { oneLine, parseJsonLoose, sha256 } from "./util.js";
 import { visibleSql } from "./store.js";
 
 export const EMBEDDING_TEMPLATE = "{entity} · {predicate}: {value}";
@@ -85,7 +85,12 @@ async function postJson(url, body, { timeoutMs, signal, apiKey }) {
     const text = await response.text().catch(() => "");
     throw new Error(`HTTP ${response.status} ${text.slice(0, 160)}`.trim());
   }
-  return response.json();
+  // Read the body as text first: some gateways append an SSE terminator to a
+  // plain JSON answer, which `response.json()` would reject as malformed.
+  const text = await response.text().catch(() => "");
+  const payload = parseJsonLoose(text);
+  if (!payload) throw new Error(`HTTP ${response.status} returned no JSON: ${oneLine(text).slice(0, 160)}`);
+  return payload;
 }
 
 const finiteVector = (value) =>

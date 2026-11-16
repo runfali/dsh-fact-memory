@@ -2100,7 +2100,7 @@ window.__ModuleLoader__.load({
       ".FM_pgQueueSession{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary)}" +
       ".FM_pgQueueMeta{font-size:11px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;white-space:nowrap}" +
       ".FM_pgQueuePreview{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary);font-size:11px}" +
-      ".FM_pgQueueRowPending{grid-template-columns:96px 90px minmax(120px,1fr) auto}" +
+      ".FM_pgQueueRowPending{grid-template-columns:96px 90px minmax(120px,1fr) auto auto}" +
       ".FM_pgQueueRowRecent{grid-template-columns:96px minmax(120px,1fr) minmax(120px,auto) auto 12px}" +
       ".FM_pgQueueItem{display:flex;flex-direction:column;min-width:0}" +
       ".FM_pgQueueRowClick{cursor:pointer}" +
@@ -2114,6 +2114,12 @@ window.__ModuleLoader__.load({
       ".FM_pgQueueInput{margin:0;max-height:220px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:var(--dsw-font-markdown-code-block,ui-monospace,monospace);font-size:11.5px;line-height:1.65;padding:10px 12px;border-radius:9px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary)}" +
       ".FM_pgQueueMore{align-self:flex-start;appearance:none;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;border-radius:8px;padding:4px 10px;cursor:pointer}" +
       ".FM_pgQueueMore:hover{border-color:var(--dsw-alias-brand-primary)}" +
+      ".FM_pgQueueRetry{align-self:center;appearance:none;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;border-radius:8px;padding:3px 10px;cursor:pointer;white-space:nowrap}" +
+      ".FM_pgQueueRetry:hover:not(:disabled){border-color:var(--dsw-alias-brand-primary)}" +
+      ".FM_pgQueueRetry:disabled{opacity:.55;cursor:default}" +
+      ".FM_pgQueueRetryRow{display:flex;align-items:center;gap:8px;flex-wrap:wrap}" +
+      ".FM_pgQueueNoteOk{color:var(--dsw-alias-state-success-label,#2e7d32)}" +
+      ".FM_pgQueueNoteDanger{color:var(--dsw-alias-state-danger-label,#c62828)}" +
       ".FM_pgQueueReject{display:flex;align-items:center;gap:6px;flex-wrap:wrap}" +
       ".FM_pgQueueRejectPill{font-size:11px;line-height:18px;padding:0 8px;border-radius:999px;background:rgba(218,165,32,.14);color:var(--dsw-alias-state-warn-label,#b8860b)}" +
       ".FM_pgQueueRecentHead{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}" +
@@ -2331,6 +2337,12 @@ window.__ModuleLoader__.load({
       "page.queue.current": "正在处理",
       "page.queue.idle": "当前没有正在跑的抽取。发一条消息后，它就会出现在这里。",
       "page.queue.pendingTitle": "多次失败、已挂起",
+      "page.queue.retry": "重试抽取",
+      "page.queue.retryBusy": "重试中…",
+      "page.queue.retryHint": "用当前模型把这段原文再读一遍",
+      "page.queue.retryDone": "已重抽：写入 {n} 条",
+      "page.queue.retryNothing": "已重抽：没有可记的新事实",
+      "page.queue.retryFailed": "重试失败：{reason}",
       "page.queue.recent": "最近完成",
       "page.queue.recentHint": "重启后仍然保留，点一行看它读到了什么",
       "page.queue.recentEmpty": "还没有运行记录：发一条消息，回合结束后抽取跑完就会出现在这里；也可以点上面的刷新。",
@@ -2629,6 +2641,12 @@ window.__ModuleLoader__.load({
       "page.queue.current": "In flight",
       "page.queue.idle": "Nothing is running right now. Send a message and the pass shows up here.",
       "page.queue.pendingTitle": "Parked after repeated failures",
+      "page.queue.retry": "Retry",
+      "page.queue.retryBusy": "Retrying…",
+      "page.queue.retryHint": "read this text again with the current model",
+      "page.queue.retryDone": "Retried: {n} saved",
+      "page.queue.retryNothing": "Retried: nothing new to save",
+      "page.queue.retryFailed": "Retry failed: {reason}",
       "page.queue.recent": "Recently finished",
       "page.queue.recentHint": "kept across restarts · click a row to see what it read",
       "page.queue.recentEmpty": "No run yet: send a message and the pass that runs when the turn ends shows up here. You can also hit refresh above.",
@@ -2885,7 +2903,7 @@ window.__ModuleLoader__.load({
         proposals: { loading: false, items: [], error: null },
         conflicts: { loading: false, groups: [], error: null },
         graph: { entity: "", view: "current", loading: false, data: null, error: null },
-        queue: { loading: false, data: null, error: null, auto: 0, expanded: { id: "", loading: false, data: null, error: null, shown: RUN_TEXT_CHUNK } },
+        queue: { loading: false, data: null, error: null, auto: 0, retry: null, expanded: { id: "", loading: false, data: null, error: null, shown: RUN_TEXT_CHUNK } },
         // The dream tab is a review surface: loaded on entry, after every action,
         // and never polled — a classic pass is minutes apart.
         dream: { loading: false, data: null, error: null, focus: "", busy: "", open: "", draftTitle: "", draftBody: "", notice: null, confirmBackfill: false },
@@ -3429,6 +3447,37 @@ window.__ModuleLoader__.load({
         });
       };
 
+      // One manual second chance: a parked batch or a failed pass is read again
+      // with the current configuration. Automatic retries stop by design, so this
+      // is the human's way to say "the model is fixed now, try once more".
+      const retryExtract = (target) => {
+        const pendingId = String(target?.pendingId ?? "").trim();
+        const runId = String(target?.runId ?? "").trim();
+        const key = pendingId !== "" ? pendingId : runId;
+        if (key === "") return Promise.resolve();
+        const current = store.getSnapshot().queue;
+        if (current.retry && current.retry.id === key && current.retry.state === "busy") return Promise.resolve();
+        patch({ queue: { ...current, retry: { id: key, state: "busy", saved: 0, error: "" } } });
+        const settle = (next) => {
+          const now = store.getSnapshot().queue;
+          const active = now.retry;
+          if (!active || active.id !== key || active.state !== "busy") return;
+          patch({ queue: { ...now, retry: { id: key, ...next } } });
+        };
+        // The model call runs on the server; the default 8s request timeout would
+        // abort every retry before the answer exists.
+        return postJson("extract-retry", pendingId !== "" ? { pendingId } : { runId }, { timeoutMs: 240000 })
+          .then((payload) => {
+            settle({
+              state: payload?.ok ? "ok" : "error",
+              saved: Math.max(0, Number(payload?.saved ?? 0) || 0),
+              error: payload?.ok ? "" : String(payload?.error || payload?.reason || "failed"),
+            });
+            if (payload?.ok) loadQueue({ force: true });
+          })
+          .catch((error) => settle({ state: "error", saved: 0, error: String(error?.message ?? error ?? "failed") }));
+      };
+
       // One page of stored text at a time; the panel asks for more explicitly.
       const showMoreRunText = () => {
         const queue = store.getSnapshot().queue;
@@ -3620,7 +3669,7 @@ window.__ModuleLoader__.load({
             proposals: { loading: false, items: [], error: null },
             conflicts: { loading: false, groups: [], error: null },
             graph: { entity: "", view: store.getSnapshot().graph.view, loading: true, data: null, error: null },
-            queue: { loading: true, data: null, error: null, auto: store.getSnapshot().queue.auto, expanded: { id: "", loading: false, data: null, error: null, shown: RUN_TEXT_CHUNK } },
+            queue: { loading: true, data: null, error: null, auto: store.getSnapshot().queue.auto, retry: null, expanded: { id: "", loading: false, data: null, error: null, shown: RUN_TEXT_CHUNK } },
             dream: { loading: false, data: null, error: null, focus: "", busy: "", open: "", draftTitle: "", draftBody: "", notice: null, confirmBackfill: false },
           });
           return refreshAll()
@@ -3665,6 +3714,8 @@ window.__ModuleLoader__.load({
           loadQueue: () => loadQueue({ force: true }),
           setQueueAuto,
           toggleExtractRun,
+          retryPending: (id) => retryExtract({ pendingId: id }),
+          retryRun: (id) => retryExtract({ runId: id }),
           showMoreRunText,
           stopQueuePolling,
           resumeQueuePolling,
@@ -5994,7 +6045,7 @@ window.__ModuleLoader__.load({
     }
 
     /** The text the model read, and what it refused to accept from its answer. */
-    function ExtractRunDetail({ run, t, shown, onMore }) {
+    function ExtractRunDetail({ run, t, shown, onMore, onRetry, retrying = false, retry = null }) {
       if (!run) return null;
       const input = String(run.inputText ?? "");
       const visible = input.slice(0, Math.max(1, Number(shown) || RUN_TEXT_CHUNK));
@@ -6012,6 +6063,14 @@ window.__ModuleLoader__.load({
         className: "FM_pgQueueDetail",
         children: [
           notCalled ? jsx("p", { className: "FM_pgQueueNote", children: notCalled }) : null,
+          // The row truncates the reason to keep the list readable; opening it is
+          // how the user reads the whole sentence (and decides whether to retry).
+          run.status === "error" || run.status === "failed"
+            ? jsx("p", {
+                className: "FM_pgQueueNote FM_pgQueueNoteDanger",
+                children: t("page.queue.reason.failed", { reason: String(run.reason || "").replace(/\s+/g, " ") }),
+              })
+            : null,
           jsxs("div", {
             className: "FM_pgQueueDetailHead",
             children: [
@@ -6069,6 +6128,28 @@ window.__ModuleLoader__.load({
             : run.reason === "no_signal"
               ? null
               : jsx("span", { className: "FM_pgQueueMeta", children: t("page.queue.detailRejectedNone") }),
+          (run.status === "error" || run.status === "failed") && typeof onRetry === "function"
+            ? jsxs("div", {
+                className: "FM_pgQueueRetryRow",
+                children: [
+                  jsx("button", {
+                    className: "FM_pgQueueRetry",
+                    type: "button",
+                    disabled: Boolean(retrying),
+                    title: t("page.queue.retryHint"),
+                    onClick: () => onRetry(run.id),
+                    children: retrying ? t("page.queue.retryBusy") : t("page.queue.retry"),
+                  }),
+                  jsx("span", {
+                    className: "FM_pgQueueMeta",
+                    children:
+                      retry && retry.state === "error"
+                        ? t("page.queue.retryFailed", { reason: String(retry.error || "").slice(0, 160) })
+                        : t("page.queue.retryHint"),
+                  }),
+                ],
+              })
+            : null,
         ],
       });
     }
@@ -6177,11 +6258,18 @@ window.__ModuleLoader__.load({
                 t,
                 shown: queue.expanded.shown,
                 onMore: actions.showMoreRunText,
+                onRetry: actions.retryRun,
+                retrying: Boolean(queue.retry && queue.retry.id === queue.expanded.data?.id && queue.retry.state === "busy"),
+                retry: queue.retry && queue.retry.id === queue.expanded.data?.id ? queue.retry : null,
               });
         return jsxs("div", { className: "FM_pgQueueItem", children: [head, body] }, key);
       };
-      const pendingRow = (item) =>
-        jsxs(
+      const pendingRow = (item) => {
+        const active = queue.retry && queue.retry.id === item.id ? queue.retry : null;
+        const busy = active?.state === "busy";
+        // Repeated failures parked this batch; the row is also the way out of the
+        // parking lot, so the retry lives right where the failure is reported.
+        return jsxs(
           "div",
           {
             className: "FM_pgQueueRow FM_pgQueueRowPending",
@@ -6190,10 +6278,19 @@ window.__ModuleLoader__.load({
               jsx("span", { className: "FM_pgQueueMeta", children: t("page.queue.chars", { n: item.chars ?? 0 }) }),
               jsx("span", { className: "FM_pgQueuePreview", children: item.preview || item.reason || "" }),
               jsx("span", { className: "FM_pgQueueMeta", children: shortTime(item.at, zone) }),
+              jsx("button", {
+                className: "FM_pgQueueRetry",
+                type: "button",
+                disabled: busy,
+                title: t("page.queue.retryHint"),
+                onClick: () => actions.retryPending(item.id),
+                children: busy ? t("page.queue.retryBusy") : t("page.queue.retry"),
+              }),
             ],
           },
           item.id,
         );
+      };
       const sections = [
         jsxs("div", {
           className: "FM_pgQueueChips",
@@ -6222,6 +6319,22 @@ window.__ModuleLoader__.load({
       if (pending.length > 0) {
         sections.push(jsx("p", { className: "FM_pgRailLabel", children: t("page.queue.pendingTitle") }));
         sections.push(jsx("div", { className: "FM_pgQueueList", children: pending.map(pendingRow) }));
+      }
+      // The result of the last manual retry stays visible even after the parked
+      // row is consumed: the list is empty again and the human still needs to know.
+      if (queue.retry && queue.retry.state !== "busy") {
+        const retry = queue.retry;
+        sections.push(
+          jsx("p", {
+            className: retry.state === "error" ? "FM_pgQueueNote FM_pgQueueNoteDanger" : "FM_pgQueueNote FM_pgQueueNoteOk",
+            children:
+              retry.state === "error"
+                ? t("page.queue.retryFailed", { reason: String(retry.error || "").slice(0, 180) })
+                : Number(retry.saved) > 0
+                  ? t("page.queue.retryDone", { n: Number(retry.saved) })
+                  : t("page.queue.retryNothing"),
+          }),
+        );
       }
       // Always drawn, even when empty: a missing section reads as "this page has
       // no such feature", while an explained empty state reads as "nothing has

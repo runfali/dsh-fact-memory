@@ -303,6 +303,19 @@ const queuePayload = {
       durationMs: 5,
       at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
     },
+    {
+      id: "run-4",
+      hasDetail: true,
+      sessionId: "session-5",
+      title: "抽取失败的那次",
+      state: "error",
+      seq: 9,
+      reason: "custom model returned no text (finish_reason=length: the whole budget went to reasoning_content (13009 chars) and no answer came back)",
+      saved: 0,
+      durationMs: 33700,
+      model: "unisound_give/u2-flash",
+      at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    },
   ],
   pending: [{ id: "p1", reason: "auto_extract_failed: timeout", at: "2026-01-01T00:03:00.000Z", chars: 320, preview: "结论先说：核心闭环能用了" }],
   totals: { running: 1, queued: 0, waiting: 1, retrying: 1, pending: 1, active: 3 },
@@ -349,28 +362,35 @@ test("the card mounts, renders, and drives config writes and actions", async () 
         },
       };
     if (url.endsWith("/queue")) return { status: 200, ok: true, json: async () => queuePayload };
+    if (url.endsWith("/extract-retry")) return { status: 200, ok: true, json: async () => ({ ok: true, saved: 2, retried: true }) };
     if (url.endsWith("/extract-run"))
       return {
         status: 200,
         ok: true,
-        json: async () => ({
-          ok: true,
-          run: {
-            id: "run-1",
-            sessionId: "session-1",
-            status: "ok",
-            reason: "",
-            messages: 2,
-            chunks: 1,
-            chars: 420,
-            saved: 2,
-            durationMs: 3400,
-            model: "fake-model",
-            inputText: "USER: 记一下抽取队列要记录最近 10 条记录" + "甲".repeat(9000),
-            inputTruncated: false,
-            rejected: [{ reason: "quote_not_in_source", count: 2 }],
-          },
-        }),
+        json: async () => {
+          // The row that was opened decides what comes back: a failed pass has
+          // to render its own status and reason, not the fixture of run-1.
+          const body = init && init.body ? JSON.parse(init.body) : {};
+          const listed = queuePayload.recent.find((row) => row.id === body.id);
+          return {
+            ok: true,
+            run: {
+              id: body.id ?? "run-1",
+              sessionId: listed?.sessionId ?? "session-1",
+              status: listed?.state ?? "ok",
+              reason: listed?.reason ?? "",
+              messages: 2,
+              chunks: 1,
+              chars: 420,
+              saved: listed?.saved ?? 2,
+              durationMs: listed?.durationMs ?? 3400,
+              model: listed?.model ?? "fake-model",
+              inputText: "USER: 记一下抽取队列要记录最近 10 条记录" + "甲".repeat(9000),
+              inputTruncated: false,
+              rejected: [{ reason: "quote_not_in_source", count: 2 }],
+            },
+          };
+        },
       };
     if (url.endsWith("/index-vectors")) return { status: 200, ok: true, json: async () => ({ ok: true, indexed: 9 }) };
     if (url.endsWith("/consolidate")) return { status: 200, ok: true, json: async () => ({ ok: true, status: "ok", judged: 3, proposals: 2, pending: 2 }) };
@@ -556,6 +576,43 @@ test("the card mounts, renders, and drives config writes and actions", async () 
     8000,
     "load more doubles the visible slice",
   );
+  // A parked batch carries the manual retry: automatic attempts stop by design,
+  // so the human needs one click that works with the current configuration.
+  const retryButton = findElement(
+    queuePanelTree,
+    (element) => element?.props?.className === "FM_pgQueueRetry" && element?.props?.children === "重试抽取",
+  );
+  assert.ok(retryButton, "a parked row carries a retry button");
+  retryButton.props.onClick();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const retryCall = calls.filter((call) => call.url === "/api/fact-memory/extract-retry").at(-1);
+  assert.ok(retryCall, "the button posts to the retry route");
+  assert.deepEqual(JSON.parse(retryCall.body), { pendingId: "p1" });
+  assert.equal(pageProps.hooks.memoryPage.getSnapshot().queue.retry?.state, "ok");
+  assert.equal(pageProps.hooks.memoryPage.getSnapshot().queue.retry?.saved, 2);
+  const retriedPanel = findElement(
+    pageSlot.component({ ...pageProps, t: pageT, useMemoryPage: (selector) => selector(pageProps.hooks.memoryPage.getSnapshot()) }),
+    (element) => element?.type?.name === "QueuePanel",
+  );
+  assert.match(JSON.stringify(retriedPanel.type(retriedPanel.props)), /已重抽：写入 2 条/);
+
+  // The failed pass keeps its own retry inside the detail block, next to the
+  // reason it could not answer.
+  pageProps.actions.toggleExtractRun("run-4");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const failedTree = pageSlot.component({ ...pageProps, t: pageT, useMemoryPage: (selector) => selector(pageProps.hooks.memoryPage.getSnapshot()) });
+  const failedPanel = findElement(failedTree, (element) => element?.type?.name === "QueuePanel");
+  const failedDetail = findElement(failedPanel.type(failedPanel.props), (element) => element?.type?.name === "ExtractRunDetail");
+  assert.ok(failedDetail, "the failed run opens");
+  const failedDetailTree = failedDetail.type(failedDetail.props);
+  assert.match(JSON.stringify(failedDetailTree), /reasoning_content/, "the failure reason reaches the detail block");
+  const failedRetry = findElement(failedDetailTree, (element) => element?.props?.className === "FM_pgQueueRetry");
+  assert.ok(failedRetry, "a failed pass offers a retry");
+  failedRetry.props.onClick();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const runRetry = calls.filter((call) => call.url === "/api/fact-memory/extract-retry").at(-1);
+  assert.deepEqual(JSON.parse(runRetry.body), { runId: "run-4" });
+
   assert.ok(
     findElement(queuePanelTree, (element) => element?.props?.children === "15 秒"),
     "the 15s interval is one of the choices",

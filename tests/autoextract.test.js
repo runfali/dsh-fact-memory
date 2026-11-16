@@ -1070,10 +1070,15 @@ test("a custom endpoint is told not to think and retried without that field when
       { system: "s", prompt: "p", timeoutMs: 5000, thinking: false },
     );
     assert.equal(text, '{"facts":[]}');
-    assert.equal(bodies.length, 2);
+    // full (all three spellings, rejected) → legacy (two, rejected) → none.
+    assert.equal(bodies.length, 3);
+    assert.deepEqual(bodies[0].chat_template_kwargs, { enable_thinking: false });
     assert.equal(bodies[0].enable_thinking, false);
     assert.equal(bodies[0].reasoning_effort, "none");
-    assert.equal(bodies[1].enable_thinking, undefined);
+    assert.equal(bodies[1].chat_template_kwargs, undefined);
+    assert.equal(bodies[1].enable_thinking, false);
+    assert.equal(bodies[2].enable_thinking, undefined);
+    assert.equal(bodies[2].reasoning_effort, undefined);
   } finally {
     server.close();
   }
@@ -1417,4 +1422,148 @@ test("a fact written by the tool still gets its turn card", async () => {
   assert.equal(activity.lastRun?.toSeq, turnSeq, "and is anchored to this turn so the card accepts it");
   assert.equal(activity.lastRun?.saved, 1);
   ctx.__dispose();
+});
+
+// ── manual retry ────────────────────────────────────────────────────────
+/** A gateway that answers each request from a list, and records what it got. */
+async function serveReplies(replies) {
+  const seen = [];
+  const server = createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk) => (body += chunk));
+    request.on("end", () => {
+      const index = seen.length;
+      seen.push(JSON.parse(body));
+      const reply = replies[Math.min(index, replies.length - 1)];
+      response.writeHead(reply.status ?? 200, { "content-type": "application/json" });
+      response.end(reply.text);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    seen,
+    url: `http://127.0.0.1:${server.address().port}/v1`,
+    close: () => server.close(),
+  };
+}
+
+const ACCEPTED = JSON.stringify({
+  facts: [
+    { entity: "manual", entityType: "service", predicate: "端口", value: "9922", cardinality: "single", confidence: 0.9, quote: "manual 服务的端口是 9922" },
+  ],
+});
+const ANSWERED = { status: 200, text: JSON.stringify({ choices: [{ message: { content: ACCEPTED }, finish_reason: "stop" }] }) };
+const BROKEN = { status: 500, text: JSON.stringify({ error: { message: "upstream exploded" } }) };
+
+test("a failed pass can be read again by hand once the model answers", async () => {
+  const gateway = await serveReplies([BROKEN, ANSWERED]);
+  try {
+    const { ctx } = boot({ overrides: { llmSource: "custom", llmBaseUrl: gateway.url, llmModel: "manual-model", llmApiKeyEnv: "" } });
+    const events = [userEvent("m1", "记住：manual 服务的端口是 9922"), assistantEvent("好")];
+    const session = fakeSession(events);
+    ctx.__agent(session.id);
+    await ctx.__preStep()[0](
+      { agent: { id: session.id }, messages: [], step: 1, modelSelection: { provider: "fake", model: "fake-model" } },
+      async () => ({ kind: "enter", messages: [] }),
+    );
+    ctx.__sessionEvent(session, turnEnd(1, events.length));
+    await until(async () => (await status(ctx)).extraction.lastRun?.status === "error");
+    assert.equal(gateway.seen.length, 1);
+
+    const queue = await postRoute(ctx, "/api/fact-memory/queue", {});
+    const failed = queue.recent.find((row) => row.state === "error");
+    assert.ok(failed, "the failed pass stays listed so the page can offer a retry");
+    // Automatic retries stop by design; the human clicking retry is what makes
+    // the second call happen.
+    const retried = await postRoute(ctx, "/api/fact-memory/extract-retry", { runId: failed.id });
+    assert.equal(retried.ok, true);
+    assert.equal(retried.retried, true);
+    assert.equal(retried.saved, 1);
+    assert.equal(gateway.seen.length, 2);
+    // The manual pass records its own run row; the store is the shared truth the
+    // page reads, so the newest row is what must say ok.
+    const after = await postRoute(ctx, "/api/fact-memory/queue", {});
+    const newest = after.recent.find((row) => row.state === "ok" && row.saved === 1);
+    assert.ok(newest, `expected a saved pass in the queue, got ${JSON.stringify(after.recent.slice(0, 3))}`);
+    ctx.__dispose();
+  } finally {
+    gateway.close();
+  }
+});
+
+test("a parked batch is retried from its stored text and then marked done", async () => {
+  const gateway = await serveReplies([
+    {
+      status: 200,
+      text: JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                facts: [{ entity: "svc", entityType: "service", predicate: "端口", value: "8123", cardinality: "single", confidence: 0.9, quote: "服务跑在 8123 上" }],
+              }),
+            },
+            finish_reason: "stop",
+          },
+        ],
+      }),
+    },
+  ]);
+  try {
+    const { ctx, dataDir } = boot({ overrides: { llmSource: "custom", llmBaseUrl: gateway.url, llmModel: "manual-model", llmApiKeyEnv: "" } });
+    const seeding = MemoryStore.open({ dataDir });
+    // Deliberately a sentence the prefilter does not recognise: the retry is a
+    // human decision, so the model must be called anyway.
+    const rescued = "部署完了，服务跑在 8123 上。";
+    assert.equal(shouldExtract(rescued), false);
+    const parkedId = seeding.addPending({ rawText: rescued, reason: "auto_extract_failed: upstream exploded" });
+    seeding.close();
+
+    const retried = await postRoute(ctx, "/api/fact-memory/extract-retry", { pendingId: parkedId });
+    assert.equal(retried.ok, true);
+    assert.equal(retried.saved, 1);
+
+    const check = MemoryStore.open({ dataDir });
+    assert.equal(check.pendingItem({ id: parkedId }).status, "resolved", "a pass that answered consumes the parked row");
+    check.close();
+    // One-click only: the row cannot be spent twice.
+    const again = await postRoute(ctx, "/api/fact-memory/extract-retry", { pendingId: parkedId });
+    assert.equal(again.ok, false);
+    assert.match(String(again.error), /处理过/);
+    ctx.__dispose();
+  } finally {
+    gateway.close();
+  }
+});
+
+test("manual extraction reads a text the signal prefilter would skip", async () => {
+  const gateway = await serveReplies([
+    {
+      status: 200,
+      text: JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                facts: [{ entity: "svc", entityType: "service", predicate: "端口", value: "8300", cardinality: "single", confidence: 0.9, quote: "服务跑在 8300 上" }],
+              }),
+            },
+            finish_reason: "stop",
+          },
+        ],
+      }),
+    },
+  ]);
+  try {
+    const { ctx } = boot({ overrides: { llmSource: "custom", llmBaseUrl: gateway.url, llmModel: "manual-model", llmApiKeyEnv: "" } });
+    const text = "部署完了，服务跑在 8300 上。";
+    assert.equal(shouldExtract(text), false);
+    const payload = await postRoute(ctx, "/api/fact-memory/extract", { text });
+    assert.equal(payload.ok, true);
+    assert.equal(payload.saved, 1);
+    assert.equal(gateway.seen.length, 1, "the model is called even without a cue word");
+    ctx.__dispose();
+  } finally {
+    gateway.close();
+  }
 });

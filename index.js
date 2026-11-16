@@ -1741,6 +1741,9 @@ function apply(ctx, config) {
   let lastModelSelection = null; // fallback for the manual route (no session)
   const extractTimers = new Map(); // sessionId -> timer
   const extractAttempts = new Map(); // sessionId -> count
+  // One manual re-read at a time per parked batch or failed run: a double click
+  // must not pay for the same model call twice.
+  const manualRetries = new Set();
   let lastExtract = null;
   /** sessionId -> what the last pass wrote, for the turn card and the drawer. */
   const lastRunBySession = new Map();
@@ -2080,11 +2083,13 @@ function apply(ctx, config) {
    * split into segments (at most four per call) and merged afterwards, exactly
    * like a multi-chunk pass.
    */
-  const extractFromText = async ({ store, sessionId, text, refs = [], cfg }) => {
+  const extractFromText = async ({ store, sessionId, text, refs = [], cfg, force = false }) => {
     const parts = splitText(text, Number(cfg.extractMaxChars ?? 24_000)).slice(0, 4);
     // One decision for the pasted text, for the same reason as a turn range: a
-    // signal in part 1 must not make parts 2..n silently skipped.
-    const wholeSignaled = shouldExtract(text);
+    // signal in part 1 must not make parts 2..n silently skipped. A human who
+    // pressed the button already decided: the prefilter is for background passes,
+    // not for an explicit "read this again" request.
+    const wholeSignaled = force || shouldExtract(text);
     const collected = [];
     let result = { status: "skipped", reason: "no_signal", rejected: 0 };
     for (let index = 0; index < parts.length; index += 1) {
@@ -3946,6 +3951,85 @@ function apply(ctx, config) {
     },
   });
 
+  // A parked batch (retries exhausted) or a failed pass (the model was broken
+  // then, it may be fine now) can be read again on demand. Automatic retries stop
+  // by design; this is the human's one-click second chance.
+  registerJsonRoute(ctx, {
+    path: "/api/fact-memory/extract-retry",
+    build: async (body) => {
+      const cfg = live();
+      const handle = handleFor(cfg);
+      if (!handle.store) return { ok: false, error: handle.error };
+      const pendingId = String(body?.pendingId ?? "").trim();
+      const runId = String(body?.runId ?? "").trim();
+      let text = "";
+      let refs = [];
+      let originSessionId = "";
+      let parked = null;
+      if (pendingId !== "") {
+        parked = handle.store.pendingItem({ id: pendingId });
+        if (!parked) return { ok: false, error: "没有这条待处理记录" };
+        if (String(parked.status) !== "waiting") return { ok: false, error: "这条已经处理过了" };
+        text = String(parked.raw_text ?? "");
+        try {
+          refs = JSON.parse(parked.source_refs || "[]");
+        } catch {
+          refs = [];
+        }
+        // The parked refs carry the session the text came from; keeping it makes
+        // the retried facts point at that conversation, not at a synthetic id.
+        originSessionId = String(refs?.[0]?.sessionId ?? "");
+      } else if (runId !== "") {
+        const run = handle.store.extractRun({ id: runId });
+        if (!run) return { ok: false, error: "没有这条抽取记录" };
+        text = String(run.inputText ?? "");
+        originSessionId = String(run.sessionId ?? "");
+      } else {
+        return { ok: false, error: "给出 pendingId 或 runId" };
+      }
+      if (text.trim() === "") return { ok: false, error: "这条记录没有留下原文，无法重试" };
+      const sessionId =
+        originSessionId !== "" ? originSessionId : pendingId !== "" ? `pending:${pendingId.slice(0, 8)}` : `retry:${runId.slice(0, 8)}`;
+      const key = pendingId !== "" ? `pending:${pendingId}` : `run:${runId}`;
+      if (manualRetries.has(key)) return { ok: false, error: "这一条正在重试" };
+      manualRetries.add(key);
+      const startedAt = Date.now();
+      try {
+        const result = await extractFromText({ store: handle.store, sessionId, text, refs, cfg, force: true });
+        // A manual pass is a real pass: record it, or the queue keeps showing the
+        // old failure as the newest word and invites a second paid click.
+        logRun(handle.store, sessionId, null, {
+          status: String(result.status ?? "error"),
+          reason: String(result.error ?? result.reason ?? ""),
+          fromSeq: 0,
+          toSeq: 0,
+          chars: text.length,
+          chunks: Number(result.segments ?? 1),
+          candidates: Number(result.candidates ?? 0),
+          saved: Number(result.saved ?? 0),
+          proposals: Number(result.proposals ?? 0),
+          conflicts: Number(result.conflicts ?? 0),
+          refused: Number(result.refused ?? 0),
+          duplicates: Number(result.duplicates ?? 0),
+          model: String(result.model ?? ""),
+          durationMs: Date.now() - startedAt,
+          inputText: text,
+          rejected: sumRejected(result.rejectedDetails),
+        });
+        // The text has been read once: a pass that answered or that found nothing
+        // worth saving consumes the parked row; a failure keeps it for another try.
+        if (parked && (result.status === "ok" || result.status === "skipped")) {
+          handle.store.setPendingStatus({ id: pendingId, status: "resolved" });
+        }
+        return { ...result, ok: result.status === "ok" || result.status === "skipped", retried: true };
+      } catch (error) {
+        return { ok: false, error: oneLine(error) };
+      } finally {
+        manualRetries.delete(key);
+      }
+    },
+  });
+
   registerJsonRoute(ctx, {
     path: "/api/fact-memory/sessions",
     build: () => {
@@ -4378,7 +4462,9 @@ function apply(ctx, config) {
       const text = String(body?.text ?? "").trim();
       if (text === "") return { ok: false, error: "给出要抽取的文本" };
       const sessionId = String(body?.sessionId ?? "").trim() || `manual:${sha256(text).slice(0, 12)}`;
-      const result = await extractFromText({ store: handle.store, sessionId, text, refs: [], cfg });
+      // Pasting text and pressing extract is a human decision too; skipping it
+      // for lack of a cue word would just look broken.
+      const result = await extractFromText({ store: handle.store, sessionId, text, refs: [], cfg, force: true });
       return { ...result, ok: result.status === "ok" };
     },
   });

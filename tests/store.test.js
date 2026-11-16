@@ -42,6 +42,22 @@ test("creates schema generation 3 and reports its identity", () => {
   store.close();
 });
 
+test("a parked batch is readable by id and can be marked done", () => {
+  const { store } = freshStore();
+  const id = store.addPending({ rawText: "记住：api 端口 9911", sourceRefs: [{ sessionId: "s-1" }], reason: "auto_extract_failed: boom" });
+  const item = store.pendingItem({ id });
+  assert.equal(item.status, "waiting");
+  assert.equal(item.raw_text, "记住：api 端口 9911");
+  assert.deepEqual(JSON.parse(item.source_refs), [{ sessionId: "s-1" }]);
+  // A manual re-read consumes the row without deleting it, so the queue can
+  // still explain what happened to that text.
+  store.setPendingStatus({ id, status: "resolved" });
+  assert.equal(store.pendingItem({ id }).status, "resolved");
+  assert.equal(store.pending({ status: "waiting" }).length, 0);
+  assert.equal(store.pendingItem({ id: "nope" }), null);
+  store.close();
+});
+
 test("duplicate write is idempotent and does not create a second row", () => {
   const { store } = freshStore();
   const first = store.writeFact(fact());

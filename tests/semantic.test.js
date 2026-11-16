@@ -96,6 +96,23 @@ test("embedding batches are validated and normalised", async () => {
   assert.notEqual(embeddingFingerprint(provider), embeddingFingerprint({ ...provider, model: "other" }));
 });
 
+test("an endpoint that appends an SSE terminator to its JSON still parses", async () => {
+  // Same quirk as the extraction gateway: a complete JSON body followed by
+  // `data: [DONE]`, which plain `response.json()` rejects as malformed.
+  const server = createServer((request, response) => {
+    request.resume();
+    request.on("end", () => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(`${JSON.stringify({ data: [{ index: 0, embedding: [1, 0, 0] }] })}data: [DONE]\n\n`);
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  cleanup.push(() => server.close());
+  const provider = { source: "openai", baseUrl: `http://127.0.0.1:${server.address().port}`, model: "fake-embed", dim: 3, apiKeyEnv: "" };
+  const [vector] = await embedTexts(provider, ["api · 端口: 8080"]);
+  assert.deepEqual(vector, [1, 0, 0]);
+});
+
 test("indexing stores vectors, reuses unchanged rows and recalls by cosine", async () => {
   const store = freshStore();
   store.writeFact({

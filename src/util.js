@@ -22,6 +22,50 @@ export function oneLine(error) {
   return text.replace(/\s+/g, " ").slice(0, 240);
 }
 
+/**
+ * Parse a JSON body that may be followed by junk. Some gateways append an SSE
+ * terminator (`data: [DONE]`) to a plain JSON answer, which makes `JSON.parse`
+ * of the whole body fail; this returns the first complete JSON value instead.
+ */
+export function parseJsonLoose(raw) {
+  const text = String(raw ?? "");
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Fall through to the prefix scan.
+  }
+  const start = text.search(/[[{]/);
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{" || char === "[") depth += 1;
+    else if (char === "}" || char === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, index + 1));
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 /** Host data root. The plugin never assumes it equals the working directory. */
 export function defaultDataDir() {
   const home = process.env.DSH_HOME && process.env.DSH_HOME.trim() !== "" ? process.env.DSH_HOME : join(homedir(), ".dsh");

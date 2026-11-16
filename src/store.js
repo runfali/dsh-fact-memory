@@ -1350,6 +1350,17 @@ export class MemoryStore {
       .all(status, status, limit);
   }
 
+  pendingItem({ id } = {}) {
+    return this.db.prepare("SELECT * FROM pending_items WHERE id = ?").get(String(id ?? "")) ?? null;
+  }
+
+  /** A parked batch is consumed by a successful manual re-read, not deleted. */
+  setPendingStatus({ id, status } = {}) {
+    this.db
+      .prepare("UPDATE pending_items SET status = ?, updated_at = ? WHERE id = ?")
+      .run(String(status ?? "waiting"), nowIso(), String(id ?? ""));
+  }
+
   // ── cursors ────────────────────────────────────────────────────────────
   cursor(namespace, sessionId) {
     return this.db
