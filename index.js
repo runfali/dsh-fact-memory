@@ -1910,10 +1910,19 @@ function apply(ctx, config) {
       // A transcript prompt belongs to a compaction/title agent, not to the user;
       // the rule path refuses the same shape, so both writers agree.
       if (role === "user" && looksLikeTranscript(text)) continue;
+      const rawTime = event.time;
+      const numericTime = typeof rawTime === "number"
+        ? rawTime
+        : typeof rawTime === "string" && rawTime.trim() !== "" && Number.isFinite(Number(rawTime))
+          ? Number(rawTime)
+          : NaN;
+      const parsedTime = Number.isFinite(numericTime) ? new Date(numericTime) : new Date(String(rawTime ?? ""));
+      const at = Number.isNaN(parsedTime.getTime()) ? nowIso() : parsedTime.toISOString();
       items.push({
         seq,
         messageId: message.id ?? null,
         role,
+        at,
         text: `${role === "assistant" ? "助手" : "用户"}：${text}`,
         // The feed keeps the message itself, not the extractor's rendering, so a
         // dream can quote the person without the role prefix leaking into a quote.
@@ -2842,10 +2851,11 @@ function apply(ctx, config) {
     for (const item of items) {
       const raw = String(item.raw ?? "");
       if (raw.trim() === "") continue;
+      if (secretHits(raw).length > 0 || privacyHits(raw).length > 0) continue;
       const written = handle.store.dreamFeedAppend({
         sessionId,
         seq: item.seq,
-        at: nowIso(),
+        at: item.at || nowIso(),
         role: item.role,
         text: raw,
       });

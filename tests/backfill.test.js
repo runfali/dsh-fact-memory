@@ -94,7 +94,7 @@ test("a backfill copies whole sessions, marks them and skips what is already kno
   assert.equal(summary.skippedKnown, 1);
   assert.equal(summary.rows, 3);
   assert.deepEqual(store.rows.map((row) => row.seq), [1, 2, 3]);
-  assert.equal(store.marks.get("s-new"), 3, "the mark is the highest seq that landed");
+  assert.equal(store.marks.get("s-new"), 4, "the mark is the next seq after the highest row that landed");
 
   // Running it again with the same marks copies nothing.
   const again = backfillSessions({
@@ -106,6 +106,26 @@ test("a backfill copies whole sessions, marks them and skips what is already kno
   });
   assert.equal(again.rows, 0);
   assert.equal(again.sessions, 0);
+});
+
+test("a saved cursor is authoritative over a conflicting legacy known callback", () => {
+  const root = tempDir("fm-backfill-cursor-");
+  makeArchive(root, "p1", "s1", [frame([
+    userEvent(1, 1_700_000_000_000, "first"),
+    userEvent(2, 1_700_000_001_000, "second"),
+  ])]);
+  const store = sinkStore();
+  store.dreamFeedStateGet = () => 2;
+  const summary = backfillSessions({
+    store,
+    root,
+    maxSessions: 10,
+    maxChars: 100000,
+    isKnown: () => true,
+  });
+  assert.equal(summary.rows, 1);
+  assert.deepEqual(store.rows.map((row) => row.seq), [2]);
+  assert.equal(store.marks.get("s1"), 3);
 });
 
 test("the default known-check reads the store's -1 as 'never seen'", () => {
@@ -145,4 +165,22 @@ test("listing finds archives and skips empty projects", () => {
   const files = listSessionFiles(root);
   assert.equal(files.length, 1);
   assert.equal(files[0].sessionId, "s1");
+});
+
+test("a budget-limited backfill resumes the same session on the next run", () => {
+  const root = tempDir("fm-backfill-resume-");
+  makeArchive(root, "p1", "s1", [frame([
+    userEvent(1, 1_700_000_000_000, "first"),
+    userEvent(2, 1_700_000_001_000, "second"),
+    userEvent(3, 1_700_000_002_000, "third"),
+  ])]);
+  const store = sinkStore();
+  store.dreamFeedStateGet = (sessionId) => store.marks.get(sessionId) ?? -1;
+  const first = backfillSessions({ store, root, maxSessions: 10, maxChars: 5 });
+  assert.equal(first.rows, 1);
+  assert.equal(store.marks.get("s1"), 2);
+  const second = backfillSessions({ store, root, maxSessions: 10, maxChars: 100 });
+  assert.equal(second.rows, 2);
+  assert.deepEqual(store.rows.map((row) => row.seq), [1, 2, 3]);
+  assert.equal(store.marks.get("s1"), 4);
 });

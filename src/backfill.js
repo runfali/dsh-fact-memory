@@ -9,7 +9,8 @@ import { privacyHits, secretHits } from "./util.js";
  * This is the one code path that reads conversations the layer never saw, so it
  * is deliberately manual (a POST body must say so), bounded by session count and
  * character budget, and idempotent: feed rows are unique per (session, seq) and
- * a session already known to the layer is skipped outright.
+ * a session is skipped only after its saved mark passes the archive's last eligible row;
+ * the saved mark is the next sequence to read, so a partial run resumes at that boundary.
  */
 
 const FRAME_MAGIC = [0x28, 0xb5, 0x2f, 0xfd];
@@ -97,9 +98,17 @@ export function sessionRows(text, { maxPerMessage = BACKFILL_MAX_PER_MESSAGE } =
     }
     const seq = Number(event.seq);
     if (!Number.isFinite(seq)) continue;
+    const rawTime = event.time;
+    const numericTime = typeof rawTime === "number"
+      ? rawTime
+      : typeof rawTime === "string" && rawTime.trim() !== "" && Number.isFinite(Number(rawTime))
+        ? Number(rawTime)
+        : NaN;
+    const parsedTime = Number.isFinite(numericTime) ? new Date(numericTime) : new Date(String(rawTime ?? ""));
+    const at = Number.isNaN(parsedTime.getTime()) ? new Date().toISOString() : parsedTime.toISOString();
     rows.push({
       seq,
-      at: new Date(Number(event.time) || Date.now()).toISOString(),
+      at,
       role,
       text: body.slice(0, maxPerMessage),
     });
@@ -153,7 +162,7 @@ export function backfillSessions({
   maxPerMessage = BACKFILL_MAX_PER_MESSAGE,
   // The store answers -1 for a session it has never seen, not null: this is the
   // layer's collection high-water mark, and negative means "nothing collected".
-  isKnown = (sessionId) => Number(store?.dreamFeedStateGet?.(sessionId) ?? -1) >= 0,
+  isKnown,
   read = readFileSync,
 } = {}) {
   const summary = {
@@ -168,6 +177,7 @@ export function backfillSessions({
   };
   const files = listSessionFiles(root);
   summary.files = files.length;
+  const customKnown = typeof isKnown === "function" ? isKnown : null;
   let used = 0;
   for (const entry of files) {
     if (summary.sessions >= maxSessions) {
@@ -177,10 +187,6 @@ export function backfillSessions({
     if (used >= maxChars) {
       summary.stopped = "chars";
       break;
-    }
-    if (isKnown(entry.sessionId)) {
-      summary.skippedKnown += 1;
-      continue;
     }
     let text = "";
     try {
@@ -194,23 +200,31 @@ export function backfillSessions({
       summary.skippedEmpty += 1;
       continue;
     }
-    const whole = rows.reduce((sum, row) => sum + row.text.length, 0);
+    const savedSeq = Number(store?.dreamFeedStateGet?.(entry.sessionId) ?? -1);
+    const lastEligibleSeq = rows.reduce((max, row) => Math.max(max, row.seq), -1);
+    if ((savedSeq >= 0 && savedSeq > lastEligibleSeq) || (customKnown?.(entry.sessionId) && savedSeq < 0)) {
+      summary.skippedKnown += 1;
+      continue;
+    }
+    // Marks are half-open cursors: the next pass starts at the saved sequence.
+    const pendingRows = savedSeq < 0 ? rows : rows.filter((row) => row.seq >= savedSeq);
+    const whole = pendingRows.reduce((sum, row) => sum + row.text.length, 0);
     if (summary.sessions > 0 && used + whole > maxChars) continue;
     let kept = 0;
-    let lastSeq = -1;
-    for (const row of rows) {
+    let nextSeq = -1;
+    for (const row of pendingRows) {
       const size = row.text.length;
       if (used + size > maxChars && kept > 0) break;
       store.dreamFeedAppend({ sessionId: entry.sessionId, seq: row.seq, at: row.at, role: row.role, text: row.text });
       used += size;
       kept += 1;
-      lastSeq = Math.max(lastSeq, row.seq);
+      nextSeq = Math.max(nextSeq, row.seq + 1);
       summary.rows += 1;
     }
     if (kept === 0) continue;
-    // The mark is what keeps a second backfill from re-reading this session; it
-    // is written only for rows that actually landed, never for a skipped file.
-    store.dreamFeedStateSet({ sessionId: entry.sessionId, lastSeq });
+    // The mark is the next sequence to read, keeping a second backfill from
+    // re-reading this session; it is written only for rows that actually landed.
+    store.dreamFeedStateSet({ sessionId: entry.sessionId, lastSeq: nextSeq });
     summary.sessions += 1;
   }
   summary.chars = used;

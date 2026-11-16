@@ -363,6 +363,33 @@ test("a dry run reports what it would keep and touches nothing", async () => {
   ctx.__dispose();
 });
 
+test("live dream feed filters sensitive text and preserves event time", async () => {
+  const { ctx, dataDir } = boot({ overrides: { dreamMinChars: 10000 } });
+  const events = [userEvent("m1", "起点")];
+  const session = fakeSession(events);
+  ctx.__agent(session.id);
+  ctx.__sessionEvent(session, turnEnd(1, events.length));
+  const secret = userEvent("m-secret", "sk-abcdefghijklmnopqrstuvwxyz123456");
+  secret.time = 1_700_000_000_000;
+  const personal = assistantEvent("手机号 13800138000");
+  personal.time = 1_700_000_001_000;
+  const epoch = assistantEvent("Unix epoch 也要按数字时间保存");
+  epoch.time = 0;
+  const safe = assistantEvent("这条不含敏感信息");
+  safe.time = 1_700_000_002_000;
+  events.push(secret, personal, epoch, safe);
+  ctx.__sessionEvent(session, turnEnd(2, events.length));
+  const store = MemoryStore.open({ dataDir });
+  const rows = store.dreamFeedRows();
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].text, "Unix epoch 也要按数字时间保存");
+  assert.equal(rows[0].at, "1970-01-01T00:00:00.000Z");
+  assert.equal(rows[1].text, "这条不含敏感信息");
+  assert.equal(rows[1].at, "2023-11-14T22:13:22.000Z");
+  store.close();
+  ctx.__dispose();
+});
+
 test("with the layer off, a manual run is refused and the feed stays empty", async () => {
   const llm = scriptedLlm([JSON.stringify({ dreams: [] })]);
   const { ctx } = boot({ llm, overrides: { dreamEnabled: false } });
