@@ -31,7 +31,7 @@
 | 界面 | 说明 |
 | --- | --- |
 | 动态上下文 `dsh-fact-memory:directory` | 预算内的当前事实清单（主体 · 属性: 值），每次请求重新计算，超出预算时截断并注明「另有 N 条，用 memory_search」 |
-| `agent/pre-step` 提醒 | 每个会话一条短提示（首轮，以及用户提到记忆的轮次），告知模型工具存在 |
+| `agent/pre-step` 提醒 | 每轮一条短提示（同一轮只一次，在该轮第一步之前），告知模型工具存在 |
 | `memory_search` | 中文/英文 BM25 + 精确标识符通道 + 可选向量通道，RRF 融合、可选重排；返回带日期与来源的命中，并如实说明哪些通道真正跑过 |
 | `memory_write` | 写入一条持久事实；按内容哈希幂等；单值槽位按证据等级决定「替换」还是「冲突」；推断或低置信的值落成提案而不是事实行 |
 | `memory_forget` | 按事实 id 或主体遗忘；逻辑删除 + 墓碑 |
@@ -134,7 +134,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-fact-memory
 | `dataDir` | `""` | 数据目录；空表示 `<DSH_HOME>/fact-memory`。指向别处等于换一个库（不迁移）。 |
 | `injectDirectory` | `true` | 把预算内目录放进每次请求的动态上下文。 |
 | `directoryBudget` | `800` | 目录预算（tokens），按 2 字符/token 折算；超出截断并给出剩余条数。 |
-| `injectReminder` | `true` | 每个会话一条提醒（首轮，或提到记忆的轮次）。 |
+| `injectReminder` | `true` | 每轮一条提醒（同一轮只一次）。 |
 | `autoCapture` | `false` | 规则式捕获用户陈述。凭据与个人隐私仍然跳过。 |
 | `refuseCredentials` | `true` | 拒绝形似凭据的写入。关闭后仍按敏感事实保存，且永远不进入模型上下文。 |
 | `sensitiveModelVisible` | `false` | 让敏感事实（手机号、证件号、邮箱）进入常驻目录与模型可见的检索结果。默认关闭：只入库，不给模型看。它只管**模型上下文**——库页与图谱页始终展示你自己的数据（凭据在任何界面都打码）。 |
@@ -231,7 +231,7 @@ dsh plugin --profile web add /absolute/path/to/dsh-fact-memory
 
 **主题索引**在页签顶部，由规则从在用的记录生成（最多 20 行）：标题、主题键、命中次数、起始日期。它是「有什么」的地图，不是「讲了什么」的摘要。
 
-**历史回填**只能手动触发。`POST /api/fact-memory/dream-backfill` 带 `{"backfill": true}` 时读取 `<DSH_HOME>/sessions` 下的会话归档（多帧 zstd，新的优先），用同一套密钥/隐私过滤，丢掉压缩摘要（摘要是摘要的摘要，不是谁说过的话），最多复制 `dreamBackfillMaxSessions`（50）个会话 / `dreamBackfillMaxChars`（200000）字符进待整理区。已经采集过的会话会跳过，重复执行不会重复入库；回填落库之后，仍由正常阈值决定何时整理。
+**历史回填**只能手动触发。`POST /api/fact-memory/dream-backfill` 带 `{"backfill": true}` 时读取 `<DSH_HOME>/sessions` 下的会话归档（多帧 zstd，新的优先），用同一套密钥/隐私过滤，丢掉压缩摘要（摘要是摘要的摘要，不是谁说过的话）和宿主/插件注入的提示（每轮一条的事实记忆提醒、运行上下文快照、审批通知等，都不是用户说过的话），最多复制 `dreamBackfillMaxSessions`（50）个会话 / `dreamBackfillMaxChars`（200000）字符进待整理区。已经采集过的会话会跳过，重复执行不会重复入库；回填落库之后，仍由正常阈值决定何时整理。
 
 **梦**页签显示待审、已采纳、以及「为什么下一次该跑 / 不该跑」的状态行，并提供一个可填写关注点的「现在整理」按钮。
 ## 磁盘上的数据

@@ -511,7 +511,7 @@ test("the directory shows what memory knows and stays silent when disabled", asy
   off.ctx.__dispose();
 });
 
-test("pre-step injects one notice per session and honours the switch", async () => {
+test("pre-step injects one notice per turn and honours the switch", async () => {
   const { ctx } = boot();
   ctx.__agent("s1");
   const handler = ctx.__preStep("s1")[0];
@@ -519,28 +519,46 @@ test("pre-step injects one notice per session and honours the switch", async () 
 
   const fresh = { id: "m1", role: "user", content: [{ type: "text", text: "你好" }], source: { kind: "user" } };
   const next = async () => ({ kind: "enter", messages: [fresh] });
-  const first = await handler({ messages: [fresh], step: 0 }, next);
-  assert.equal(first.messages.length, 2);
+  const first = await handler({ messages: [fresh], turn: 1, step: 1 }, next);
+  assert.equal(first.messages.length, 2, "the first turn gets one notice");
   assert.equal(first.messages[1].source.kind, "plugin:dsh-fact-memory");
   assert.equal(first.messages[1].source.form, "notice");
   assert.ok(first.messages[1].source.summary.length <= 120);
 
-  const second = await handler({ messages: [fresh], step: 1 }, next);
-  assert.equal(second.messages.length, 1);
+  const second = await handler({ messages: [fresh], turn: 1, step: 2 }, next);
+  assert.equal(second.messages.length, 1, "a later step of the same turn repeats nothing");
 
-  const cue = { id: "m2", role: "user", content: [{ type: "text", text: "你记得我的偏好吗" }], source: { kind: "user" } };
-  const third = await handler({ messages: [cue], step: 2 }, async () => ({ kind: "enter", messages: [cue] }));
-  assert.equal(third.messages.length, 2);
+  const third = await handler({ messages: [fresh], turn: 2, step: 1 }, next);
+  assert.equal(third.messages.length, 2, "the next turn gets one again");
   ctx.__dispose();
 
   const off = boot({ injectReminder: false });
   off.ctx.__agent("s1");
   const quiet = await off.ctx.__preStep("s1")[0](
-    { messages: [cue], step: 0 },
-    async () => ({ kind: "enter", messages: [cue] }),
+    { messages: [fresh], turn: 1, step: 1 },
+    async () => ({ kind: "enter", messages: [fresh] }),
   );
   assert.equal(quiet.messages.length, 1);
   off.ctx.__dispose();
+});
+
+test("a leftover pre-step listener cannot double the notice", async () => {
+  const { ctx } = boot();
+  ctx.__agent("s1");
+  const handler = ctx.__preStep("s1")[0];
+  const fresh = { id: "m1", role: "user", content: [{ type: "text", text: "你好" }], source: { kind: "user" } };
+  const base = async () => ({ kind: "enter", messages: [fresh] });
+  // The host chains listeners: the one registered last runs innermost, so the
+  // innermost injects first and the outer one must find the turn already marked.
+  const inner = await handler({ messages: [fresh], turn: 1, step: 1 }, base);
+  const outer = await handler({ messages: [fresh], turn: 1, step: 1 }, async () => inner);
+  assert.equal(outer.messages.length, 2);
+  assert.equal(
+    outer.messages.filter((message) => message?.source?.kind === "plugin:dsh-fact-memory").length,
+    1,
+    "exactly one notice per turn even with two live listeners",
+  );
+  ctx.__dispose();
 });
 
 test("autoCapture is off by default and writes when switched on", async () => {

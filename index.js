@@ -19,7 +19,7 @@
  *
  * SURFACES
  *   host   dynamic system context `dsh-fact-memory:directory`
- *          `agent/pre-step` fresh-user notice (per session, or on a memory cue)
+ *          `agent/pre-step` notice (one per turn, before the first step)
  *          tools `memory_search` / `memory_write` / `memory_forget`
  *          POST /api/fact-memory/{status,export,rebuild,import,conflicts,resolve,
  *               proposals,proposal-apply,proposal-reject,graph,index-vectors,calibrate,extract,
@@ -51,7 +51,6 @@ import {
   buildDirectory,
   dreamCueHits,
   dreamCueText,
-  looksMemoryRelated,
   messageText,
 } from "./src/inject.js";
 import { commitImport, exportFile, previewImport } from "./src/jsonl.js";
@@ -100,6 +99,16 @@ const MAX_VALUE_CHARS = 500;
 const MAX_SESSIONS = 500;
 
 /**
+ * sessionId → { agent, turn }: the turn whose reminder was already injected.
+ *
+ * Module scope, not apply scope. The notice is per turn now, so a plugin
+ * restart (whose listener can survive on the agent's own ctx) must not inject a
+ * second one inside a turn that already got one. The agent is part of the key
+ * because a resumed session gets a fresh agent whose turn counter restarts at 1.
+ */
+const notifiedTurns = new Map();
+
+/**
  * A delegated subagent session is a worker, not a source of durable user
  * facts: its transcript is task scaffolding (the delegation prompt, the
  * parent's constraints, a report full of intermediate claims). The parent
@@ -121,7 +130,7 @@ const Config = z
     injectDirectory: z.boolean().default(true),
     /** Directory budget in tokens (converted to characters conservatively). */
     directoryBudget: z.number().min(100).max(4000).step(50).default(800),
-    /** One notice message per session (or on a memory cue) before the first step. */
+    /** One notice message per turn, injected before the turn's first step. */
     injectReminder: z.boolean().default(true),
     /** Rule-based capture of user statements. Off by default. */
     autoCapture: z.boolean().default(false),
@@ -1633,7 +1642,6 @@ function apply(ctx, config) {
   }, "dsh-fact-memory: memory_forget");
 
   // ── per-turn hook: fresh-user notice + optional rule-based capture ──────
-  const seenSessions = new Set();
   const processedText = new Map(); // sessionId -> Set(text hash)
   const capSet = (set, max) => {
     if (set.size <= max) return;
@@ -3219,6 +3227,12 @@ function apply(ctx, config) {
         const handle = handleFor(cfg);
         if (!handle.store) return decision;
         const text = messageText(fresh);
+        // One notice per turn: the host puts its own turn counter on the pre-step
+        // payload (agent.ts preStep passes { ...position }), so a later step of the
+        // same turn returns here and skips the cue and the capture work as well.
+        const turnKey = Number.isInteger(payload?.turn) ? payload.turn : (fresh.id ?? null);
+        const previous = notifiedTurns.get(sessionId);
+        if (turnKey !== null && previous && previous.agent === agent && previous.turn === turnKey) return decision;
         // Dream cue: one line, only while the layer is on and the message names a
         // note's topic. Kept outside the reminder budget because it is about this
         // topic, not about the library as a whole.
@@ -3264,16 +3278,14 @@ function apply(ctx, config) {
           });
         }
         if (cfg.injectReminder === false) return withCue(decision);
-        const first = !seenSessions.has(sessionId);
-        if (!first && !looksMemoryRelated(text)) return withCue(decision);
         // The budget is a real switch, not a label: 0 silences the notice and a
         // positive value caps it. Before this the setting was documented in both
         // READMEs and read nowhere, so a user who set 0 still got the full text.
         const noticeBudget = budgetChars(Number(cfg.reminderBudgetTokens ?? 300));
         if (noticeBudget <= 0) return decision;
         const empty = visibleCount(handle.store, safetyOf(cfg).sensitiveModelVisible) === 0;
-        seenSessions.add(sessionId);
-        if (seenSessions.size > MAX_SESSIONS) seenSessions.delete(seenSessions.values().next().value);
+        notifiedTurns.set(sessionId, { agent, turn: turnKey });
+        if (notifiedTurns.size > MAX_SESSIONS) notifiedTurns.delete(notifiedTurns.keys().next().value);
         const body = clampCodepoints(empty ? REMINDER_EMPTY : REMINDER_WITH_FACTS, noticeBudget).text;
         return withCue({
           kind: "enter",

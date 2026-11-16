@@ -69,6 +69,15 @@ export function sessionRows(text, { maxPerMessage = BACKFILL_MAX_PER_MESSAGE } =
     let content = null;
     let role = "";
     if (event?.type === "user/message") {
+      // Only a real user message is the person speaking. Runtime snapshots,
+      // approval notices and plugin notices (including the fact-memory reminder
+      // injected every turn) are host or plugin prose; copying them into the
+      // feed would let a dream quote boilerplate as if the user had said it.
+      // Same rule as the live reader in index.js (newPassMessages).
+      if (event?.data?.source?.kind !== "user") {
+        skipped.injected += 1;
+        continue;
+      }
       content = event?.data?.content;
       role = "user";
     } else if (event?.type === "assistant/message") {

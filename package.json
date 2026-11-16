@@ -1,7 +1,7 @@
 {
   "name": "dsh-fact-memory",
-  "version": "0.9.0",
-  "description": "跨会话事实记忆：SQLite 权威事实库 + 三工具（memory_search / memory_write / memory_forget）+ 常驻目录与会话首轮提醒 + 提案队列 + 向量/重排通道 + 事实图谱 + JSONL 导出导入 + 梦层（长文整理，双时态/热度/主题索引/历史回填，默认关闭，采纳才入库）。只记「下次会话仍成立」的事实，带来源与时间。",
+  "version": "0.9.1",
+  "description": "跨会话事实记忆：SQLite 权威事实库 + 三工具（memory_search / memory_write / memory_forget）+ 常驻目录与每轮提醒 + 提案队列 + 向量/重排通道 + 事实图谱 + JSONL 导出导入 + 梦层（长文整理，双时态/热度/主题索引/历史回填，默认关闭，采纳才入库）。只记「下次会话仍成立」的事实，带来源与时间。",
   "type": "module",
   "main": "index.js",
   "exports": {

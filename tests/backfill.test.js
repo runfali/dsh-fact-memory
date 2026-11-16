@@ -19,7 +19,21 @@ after(() => {
 const frame = (events) => zstdCompressSync(Buffer.from(events.map((event) => JSON.stringify(event) + "\n").join(""), "utf8"));
 
 function userEvent(seq, time, text) {
-  return { type: "user/message", seq, time, data: { content: [{ type: "text", text }] } };
+  return {
+    type: "user/message",
+    seq,
+    time,
+    data: { source: { kind: "user", rpcId: "r1" }, content: [{ type: "text", text }] },
+  };
+}
+/** A host/plugin-injected user-role message: the fact-memory reminder is one per turn. */
+function noticeEvent(seq, time, text, kind = "plugin:dsh-fact-memory") {
+  return {
+    type: "user/message",
+    seq,
+    time,
+    data: { source: { kind, form: "notice", summary: "记忆已就绪" }, content: [{ type: "text", text }] },
+  };
 }
 function assistantEvent(seq, time, text) {
   return { type: "assistant/message", seq, time, data: { turn: 1, step: 1, message: { role: "assistant", content: [{ type: "text", text }] } } };
@@ -71,6 +85,21 @@ test("rows carry seq, world time and role, and injected summaries are dropped", 
   assert.equal(rows[1].role, "assistant");
   assert.equal(skipped.injected, 1, "a compaction summary is not something the user said");
   assert.equal(skipped.secrets, 1);
+});
+
+test("injected notices never reach the feed, however many turns carry one", () => {
+  // The fact-memory reminder is now injected once per turn, so an archive is
+  // full of them. They are host prose, not something the user said.
+  const reminder = "【事实记忆】本会话可用跨会话事实记忆：目录已在动态上下文中；需要细节或来源时调用 memory_search。";
+  const text = [
+    JSON.stringify(userEvent(1, 1_700_000_000_000, "真正的问题")),
+    JSON.stringify(noticeEvent(2, 1_700_000_000_100, reminder)),
+    JSON.stringify(noticeEvent(3, 1_700_000_000_200, "【事实记忆目录】…", "runtime-context")),
+    JSON.stringify(assistantEvent(4, 1_700_000_001_000, "回答")),
+  ].join("\n");
+  const { rows, skipped } = sessionRows(text);
+  assert.deepEqual(rows.map((row) => row.seq), [1, 4]);
+  assert.equal(skipped.injected, 2, "the per-turn reminder and the runtime snapshot are not user speech");
 });
 
 test("a backfill copies whole sessions, marks them and skips what is already known", () => {
