@@ -34,8 +34,8 @@ const fact = (overrides = {}) => ({
 
 test("the dream generation exists alongside the fact tables", () => {
   const { store } = freshStore();
-  assert.equal(SCHEMA_VERSION, 14);
-  assert.equal(store.meta.schemaVersion, 14);
+  assert.equal(SCHEMA_VERSION, 15);
+  assert.equal(store.meta.schemaVersion, 15);
   const names = store.db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
     .all()
@@ -233,6 +233,23 @@ test("the per-session collection mark survives the feed rows being consumed", ()
   store.close();
 });
 
+test("opening a note through dream_read is counted, and a draft is never counted", () => {
+  const { store } = freshStore();
+  const live = store.dreamCreate({ topicKey: "release-process", title: "发布", body: "两步走。", topics: [] });
+  const draft = store.dreamCreate({ topicKey: "draft-note", title: "草稿", body: "还没采纳。", topics: [] });
+  store.dreamApply({ id: live.id });
+  assert.equal(store.dream(live.id).readCount, 0);
+  assert.equal(store.dreamCount({ status: ["active"] }), 1);
+  assert.equal(store.dreamCount({ status: ["pending"] }), 1);
+  const touched = store.dreamRead({ ids: [live.id, draft.id], at: "2026-11-16T10:00:00.000Z" });
+  assert.equal(touched.read, 1, "only an accepted note can be opened");
+  const after = store.dream(live.id);
+  assert.equal(after.readCount, 1);
+  assert.equal(after.lastReadAt, "2026-11-16T10:00:00.000Z");
+  assert.equal(store.dreamRead({ ids: [] }).read, 0);
+  store.close();
+});
+
 test("a store that migrated with the draft v12 index loses it, then gains world time", () => {
   const { store, dir } = freshStore();
   // Recreate the state an early 0.8.0 build left behind: schema version 12 with the
@@ -247,10 +264,14 @@ test("a store that migrated with the draft v12 index loses it, then gains world 
     .all()
     .map((row) => String(row.name));
   assert.deepEqual(names, []);
-  assert.equal(reopened.meta.schemaVersion, 14);
+  assert.equal(reopened.meta.schemaVersion, 15);
   const columns = reopened.db.prepare("PRAGMA table_info(dreams)").all().map((row) => String(row.name));
   for (const name of ["valid_from", "valid_to", "hit_count", "last_hit_at"]) {
     assert.ok(columns.includes(name), "v14 adds " + name);
+  }
+  // v15 adds the read counters on top, so the same hand-fixed file gains them too.
+  for (const name of ["read_count", "last_read_at"]) {
+    assert.ok(columns.includes(name), "v15 adds " + name);
   }
   assert.equal(reopened.integrity().ok, true);
   reopened.close();

@@ -289,6 +289,10 @@ test("an accepted note is cued in one line, and only when the turn is about it",
   // The cue names the note and where to read it, and never claims it is a fact.
   assert.match(cued.messages[1].content[0].text, /发布改成两步走/);
   assert.doesNotMatch(cued.messages[1].content[0].text, /memory_search/);
+  // A cue that points at a page tab is useless to a model: it has to name the
+  // tool and the exact query that opens this note.
+  assert.match(cued.messages[1].content[0].text, /dream_read/);
+  assert.match(cued.messages[1].content[0].text, /release-process/);
 
   const other = said("今天晚饭吃什么");
   const quiet = await handler({ messages: [other], step: 0 }, next(other));
@@ -303,6 +307,54 @@ test("an accepted note is cued in one line, and only when the turn is about it",
   assert.ok(listing.active[0].lastHitAt);
   assert.equal(listing.index.length, 1, "the topic index lists the live note");
   assert.equal(listing.index[0].topicKey, "release-process");
+  ctx.__dispose();
+});
+
+test("the model can open a note by topic, and a draft is never readable", async () => {
+  const llm = scriptedLlm([JSON.stringify({ dreams: [] })]);
+  const { ctx, dataDir } = boot({ llm, overrides: { injectReminder: true } });
+  const store = MemoryStore.open({ dataDir });
+  store.dreamCreate({ topicKey: "draft-note", title: "还没采纳的草稿", body: "这段还不算历史。", topics: ["草稿"] });
+  const live = store.dreamCreate({
+    topicKey: "release-process",
+    title: "发布改成两步走",
+    body: "发布改成两步：预发环境跑完整回归，通过后由值班的人手动上线。",
+    topics: ["发布流程"],
+    sources: [{ sessionId: "sess-1", label: "S1", fromSeq: 3, toSeq: 9 }],
+  });
+  store.dreamApply({ id: live.id });
+  store.close();
+
+  const tool = ctx.__tools.get("dream_read");
+  assert.ok(tool, "the tool the reminder names has to exist");
+
+  // The per-turn reminder is the only reason a model would ever call it, so the
+  // tool has to be named in the sentence that is injected on every turn.
+  ctx.__agent("sess-1");
+  const handler = ctx.__preStep()[0];
+  const said = { id: "m1", role: "user", content: [{ type: "text", text: "随便说点什么" }], source: { kind: "user" } };
+  const injected = await handler({ messages: [said], turn: 1, step: 0 }, async () => ({ kind: "enter", messages: [said] }));
+  assert.equal(injected.messages.length, 2);
+  assert.match(injected.messages[1].content[0].text, /dream_read/);
+
+  const index = await tool.execute({});
+  assert.equal(index.outcome, "ok");
+  assert.match(index.rendered, /release-process/);
+  assert.doesNotMatch(index.rendered, /draft-note/, "a draft is not history yet");
+
+  const read = await tool.execute({ query: "发布" });
+  assert.equal(read.outcome, "ok");
+  assert.match(read.rendered, /预发环境跑完整回归/);
+  assert.match(read.rendered, /来源：S1 sess-1 3–9/);
+  assert.equal(read.items[0].readCount, 0, "the count reported is the one before this call");
+
+  const listing = await postRoute(ctx, "/api/fact-memory/dreams", {});
+  assert.equal(listing.active[0].readCount, 1);
+  assert.ok(listing.active[0].lastReadAt);
+
+  const missing = await tool.execute({ query: "量子计算" });
+  assert.equal(missing.outcome, "not_found");
+  assert.match(missing.message, /memory_search/);
   ctx.__dispose();
 });
 

@@ -38,6 +38,7 @@ function actions() {
     rejectDream: noop,
     editDream: noop,
     toggleDream: noop,
+    toggleDreamNote: noop,
     setDreamDraft: noop,
     setDreamFocus: noop,
     runDream: noop,
@@ -85,4 +86,152 @@ test("the dream panel renders every state without a missing helper", () => {
   assert.ok(DreamPanel({ dream: { ...base, data: full, confirmBackfill: true, notice: { code: "page.dream.ran", params: { accepted: 1, dropped: 0 } } }, t, zone: undefined, actions: actions() }));
   assert.ok(DreamPanel({ dream: { ...base, data: full, busy: "backfill", open: "d1" }, t, zone: undefined, actions: actions() }));
   assert.ok(DreamPanel({ dream: { ...base, data: null, error: "boom" }, t, zone: undefined, actions: actions() }));
+});
+
+test("an accepted note shows its title until it is opened", () => {
+  const calls = [];
+  const act = { ...actions(), toggleDreamNote: (id) => calls.push(id) };
+  const note = {
+    id: "d1",
+    topicKey: "release-process",
+    title: "发布改成两步走",
+    body: "预发环境跑完整回归。",
+    topics: ["发布流程"],
+    novelty: "high",
+    unverified: false,
+    sources: [{ sessionId: "sess-1", label: "S1", fromSeq: 3, toSeq: 9 }],
+    createdAt: "2026-11-10T00:00:00.000Z",
+    updatedAt: "2026-11-10T00:00:00.000Z",
+    validFrom: "2026-11-01T00:00:00.000Z",
+    hitCount: 2,
+    readCount: 1,
+  };
+  const data = {
+    enabled: true,
+    active: [note],
+    pending: [],
+    index: [{ topicKey: "release-process", title: "发布改成两步走", hitCount: 2, readCount: 1 }],
+    archived: [],
+    counts: { pending: 0, active: 1, archived: 0 },
+    archiveAfterDays: 90,
+  };
+  const scan = (node, texts, heads) => {
+    if (!node || typeof node !== "object") return;
+    const props = node.props ?? {};
+    if (typeof props.children === "string") texts.push(props.children);
+    if (typeof props.className === "string" && props.className.startsWith("FM_pgDreamRow")) heads.push(props);
+    const kids = props.children;
+    if (Array.isArray(kids)) kids.forEach((kid) => scan(kid, texts, heads));
+    else if (kids !== undefined) scan(kids, texts, heads);
+  };
+
+  // Closed: the title is enough to decide; sixteen three-hundred-character
+  // previews are not a library, they are a wall.
+  const texts = [];
+  const heads = [];
+  scan(DreamPanel({ dream: { ...base, data }, t, zone: "Asia/Shanghai", actions: act }), texts, heads);
+  assert.ok(texts.includes("发布改成两步走"), "the title is on the page");
+  assert.ok(!texts.includes("预发环境跑完整回归。"), "the prose waits for a click");
+  const rows = heads.filter((props) => props.role === "button");
+  assert.equal(rows.length, 1, "the accepted note has one clickable row");
+  assert.equal(rows[0]["aria-expanded"], false);
+  // Accepted notes come before the review queue and before the topic index.
+  const order = texts.filter((text) => text === "page.dream.activeTitle" || text === "page.dream.indexTitle" || text === "page.dream.pendingTitle");
+  assert.deepEqual(order, ["page.dream.activeTitle", "page.dream.pendingTitle", "page.dream.indexTitle"]);
+
+  rows[0].onClick();
+  assert.deepEqual(calls, ["d1"], "clicking the row asks the controller to open this note");
+
+  // Opened: the prose, the key, the date and the source range all arrive.
+  const openTexts = [];
+  const openHeads = [];
+  scan(DreamPanel({ dream: { ...base, data, openNote: "d1" }, t, zone: "Asia/Shanghai", actions: act }), openTexts, openHeads);
+  assert.ok(openTexts.includes("预发环境跑完整回归。"), "the prose arrives with the click");
+  assert.ok(openTexts.includes("page.dream.detailMeta"));
+  assert.ok(openTexts.includes("page.dream.sourceLine"));
+  assert.ok(openTexts.includes("page.dream.topics"));
+  assert.equal(openHeads.filter((props) => props.role === "button")[0]["aria-expanded"], true);
+});
+
+test("fifteen notes and ten index rows per page, with real page numbers", () => {
+  const calls = [];
+  const act = { ...actions(), setDreamPage: (kind, page) => calls.push(kind + ":" + page) };
+  const note = (n) => ({
+    id: "d" + n,
+    topicKey: "topic-" + n,
+    title: "笔记 " + n,
+    body: "正文 " + n,
+    createdAt: "2026-11-10T00:00:00.000Z",
+    updatedAt: "2026-11-10T00:00:00.000Z",
+    hitCount: 0,
+    readCount: 0,
+  });
+  const data = {
+    enabled: true,
+    active: Array.from({ length: 16 }, (_unused, index) => note(index + 1)),
+    pending: [],
+    index: Array.from({ length: 12 }, (_unused, index) => ({ topicKey: "topic-" + (index + 1), title: "主题 " + (index + 1), hitCount: 0, readCount: 0 })),
+    archived: [],
+    counts: { pending: 0, active: 16, archived: 0 },
+    archiveAfterDays: 90,
+  };
+  const collect = (node, texts, pagers) => {
+    if (!node || typeof node !== "object") return;
+    const props = node.props ?? {};
+    if (typeof props.children === "string") texts.push(props.children);
+    if (props.className === "FM_pgPager") pagers.push(props);
+    const kids = props.children;
+    if (Array.isArray(kids)) kids.forEach((kid) => collect(kid, texts, pagers));
+    else if (kids !== undefined) collect(kids, texts, pagers);
+  };
+
+  const texts = [];
+  const pagers = [];
+  collect(DreamPanel({ dream: { ...base, data }, t, zone: "Asia/Shanghai", actions: act }), texts, pagers);
+  assert.ok(texts.includes("笔记 15"), "page one ends on the fifteenth note");
+  assert.ok(!texts.includes("笔记 16"), "the sixteenth note waits for page two");
+  assert.ok(texts.includes("主题 10"), "the index shows ten rows");
+  assert.ok(!texts.includes("主题 11"), "the eleventh topic waits for page two");
+  assert.equal(pagers.length, 2, "both lists have a pager");
+
+  // The page-two render is driven by state, so the second page is reachable.
+  const pageTwo = [];
+  collect(DreamPanel({ dream: { ...base, data, notePage: 2, indexPage: 2 }, t, zone: "Asia/Shanghai", actions: act }), pageTwo, []);
+  assert.ok(pageTwo.includes("笔记 16"), "page two carries the last note");
+  assert.ok(!pageTwo.includes("笔记 1"), "page two does not repeat page one");
+  assert.ok(pageTwo.includes("主题 11"), "page two carries the rest of the index");
+
+  // Numbered buttons, not a "load more": page two is one click away.
+  const flat = (kids) => (Array.isArray(kids) ? kids : [kids]);
+  const buttons = [];
+  const findButtons = (node) => {
+    if (!node || typeof node !== "object") return;
+    if (node.type === "button" && typeof node.props?.children === "string") buttons.push(node);
+    const kids = node.props?.children;
+    if (Array.isArray(kids)) kids.forEach(findButtons);
+    else if (kids !== undefined) findButtons(kids);
+  };
+  findButtons(DreamPanel({ dream: { ...base, data }, t, zone: "Asia/Shanghai", actions: act }));
+  const second = buttons.find((node) => node.props.children === "2");
+  assert.ok(second, "a numbered page button exists");
+  assert.equal(flat(second.props.className).join(""), "FM_pgPagerBtn");
+  assert.deepEqual(calls, [], "rendering alone turns no page");
+  second.props.onClick();
+  assert.deepEqual(calls, ["note:2"], "clicking 2 asks the controller for page two");
+  const current = buttons.find((node) => node.props.className === "FM_pgPagerBtn FM_pgPagerBtnOn");
+  assert.equal(current.props.children, "1", "page one is marked as the current page");
+
+  // The archive is paged the same way, and its rows open nothing: they are
+  // history, kept readable but not editable in place.
+  const archived = {
+    ...data,
+    archived: Array.from({ length: 12 }, (_unused, index) => ({ id: "a" + (index + 1), topicKey: "old-" + (index + 1), title: "旧笔记 " + (index + 1), updatedAt: "2026-09-01T00:00:00.000Z" })),
+    counts: { pending: 0, active: 16, archived: 12 },
+  };
+  const archivedTexts = [];
+  const archivedPagers = [];
+  collect(DreamPanel({ dream: { ...base, data: archived }, t, zone: "Asia/Shanghai", actions: act }), archivedTexts, archivedPagers);
+  assert.ok(archivedTexts.includes("旧笔记 10"), "the archive shows ten rows");
+  assert.ok(!archivedTexts.includes("旧笔记 11"), "the eleventh archived note waits for page two");
+  assert.equal(archivedPagers.length, 3, "all three lists have a pager");
 });

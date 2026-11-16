@@ -148,6 +148,11 @@ export function rowToDream(row) {
     validTo: row.valid_to ?? null,
     hitCount: Number(row.hit_count ?? 0),
     lastHitAt: row.last_hit_at ?? null,
+    // Reads are the model actually opening the note (dream_read); hits are the
+    // topic coming up in conversation. Kept apart because they answer different
+    // questions: is the topic still alive, versus does the model ever use it.
+    readCount: Number(row.read_count ?? 0),
+    lastReadAt: row.last_read_at ?? null,
     supersedesId: row.supersedes_id ?? null,
     supersededBy: row.superseded_by ?? null,
     runId: row.run_id ?? null,
@@ -2194,6 +2199,32 @@ export class MemoryStore {
       for (const id of list) touched += Number(statement.run(at, id).changes) || 0;
     });
     return { touched };
+  }
+
+  /**
+   * Record that the model opened these notes through `dream_read`. This is the
+   * only signal that separates a memory layer someone uses from one that merely
+   * exists: a cue proves the topic came up, a read proves a note was wanted.
+   */
+  dreamRead({ ids = [], at = nowIso() } = {}) {
+    const list = (Array.isArray(ids) ? ids : []).map((id) => String(id ?? "")).filter((id) => id !== "");
+    if (list.length === 0) return { read: 0 };
+    let read = 0;
+    this.tx(() => {
+      const statement = this.db.prepare("UPDATE dreams SET read_count = read_count + 1, last_read_at = ? WHERE id = ? AND status = 'active'");
+      for (const id of list) read += Number(statement.run(at, id).changes) || 0;
+    });
+    return { read };
+  }
+
+  /** How many notes sit in the given statuses — the reminder only needs a count. */
+  dreamCount({ status = ["active"] } = {}) {
+    const list = (Array.isArray(status) ? status : [status]).map((value) => String(value)).filter((value) => value !== "");
+    const row =
+      list.length === 0
+        ? this.db.prepare("SELECT COUNT(*) AS count FROM dreams").get()
+        : this.db.prepare("SELECT COUNT(*) AS count FROM dreams WHERE status IN (" + list.map(() => "?").join(",") + ")").get(...list);
+    return Number(row?.count ?? 0);
   }
 
   /**

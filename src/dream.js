@@ -23,9 +23,105 @@ export const DREAM_LIMITS = {
   maxMessages: 20000,
   maxLines: 8,
   maxLineChars: 120,
-  maxTitle: 30,
+  // The prompt asks for 35 characters; 45 is what the parser accepts, because
+  // a model overshooting by a few characters is normal, and cutting at 35 lost
+  // tails that mattered ("...$host 会 4" instead of "...$host 会 404").
+  maxTitleAsk: 35,
+  maxTitle: 45,
   maxTopics: 8,
 };
+
+/**
+ * Keep a title inside `maxTitle` without silently halving it.
+ *
+ * A hard slice at 30 characters produced titles like "nginx proxy_pass 带变量必须配
+ * resolv", where the tail (the word `resolver`) was simply gone and the note read
+ * like a different, wrong note. Past the limit we cut at the last natural break and
+ * mark the cut, so a clipped title never pretends to be complete.
+ */
+export function clipTitle(raw, limit = DREAM_LIMITS.maxTitle) {
+  const text = String(raw ?? "").trim();
+  const chars = Array.from(text);
+  if (chars.length <= limit) return text;
+  const head = chars.slice(0, Math.max(1, limit - 1)).join("");
+  const breakAt = Math.max(
+    head.lastIndexOf(" "),
+    head.lastIndexOf("，"),
+    head.lastIndexOf("、"),
+    head.lastIndexOf("："),
+    head.lastIndexOf("；"),
+    head.lastIndexOf(","),
+    head.lastIndexOf(";"),
+    head.lastIndexOf(":"),
+  );
+  // Only a late break is honoured: cutting at the first space of a long English
+  // title would discard most of the words for the sake of tidiness.
+  const kept = breakAt >= Math.floor((limit - 1) * 0.6) ? head.slice(0, breakAt) : head;
+  return kept.trimEnd() + "…";
+}
+
+/**
+ * Retrieve notes by topic, for the `dream_read` tool.
+ *
+ * The caller arrives with words, not with an id: either the cue just showed it a
+ * title, or the user asked "how did we do this last time". Matching mirrors the
+ * cue (substring probes plus CJK bigram coverage) but is scored, because one
+ * query can pull several notes and the most on-topic one has to come first.
+ */
+export function searchDreams(dreams, query, limit = 3) {
+  const asked = String(query ?? "").normalize("NFKC").toLowerCase().trim();
+  if (asked === "") return [];
+  const tokens = queryTokens(asked);
+  const hits = [];
+  for (const dream of Array.isArray(dreams) ? dreams : []) {
+    if (!dream || String(dream.body ?? "").trim() === "") continue;
+    const title = String(dream.title ?? "").toLowerCase();
+    const key = String(dream.topicKey ?? "").toLowerCase();
+    const topics = (Array.isArray(dream.topics) ? dream.topics : []).map((topic) => String(topic).toLowerCase());
+    // The key is matched both as written and with its dashes turned into spaces:
+    // someone quoting the cue types "release-process", someone describing it says
+    // "release process", and both mean the same note.
+    const named = [key, key.replace(/-/g, " "), ...topics].filter((probe) => probe.length >= 2);
+    const body = String(dream.body ?? "").toLowerCase();
+    let score = 0;
+    // A whole-phrase match outranks any number of loose tokens: it is what the
+    // cue showed the model, and it is what the user just said.
+    if (asked.length >= 2 && title.includes(asked)) score += 6;
+    if (named.some((probe) => probe.includes(asked) || asked.includes(probe))) score += 4;
+    if (asked.length >= 2 && body.includes(asked)) score += 3;
+    for (const token of tokens) {
+      if (title.includes(token)) score += 3;
+      if (named.some((probe) => probe.includes(token))) score += 2;
+      if (body.includes(token)) score += 1;
+    }
+    if (score > 0) hits.push({ ...dream, score });
+  }
+  hits.sort(
+    (a, b) =>
+      b.score - a.score ||
+      Number(b.hitCount ?? 0) - Number(a.hitCount ?? 0) ||
+      String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")),
+  );
+  const wanted = Math.min(5, Math.max(1, Math.trunc(Number(limit) || 3)));
+  return hits.slice(0, wanted);
+}
+
+/** Latin words and CJK bigrams — the units that survive how people rephrase. */
+function queryTokens(text) {
+  const source = String(text);
+  const tokens = new Set();
+  for (const word of source.match(/[a-z0-9][a-z0-9._-]+/g) ?? []) {
+    tokens.add(word);
+    // "release-process" also has to match a note written as "release process".
+    for (const part of word.split(/[._-]+/)) if (part.length >= 2) tokens.add(part);
+  }
+  for (const run of source.match(/[\u4e00-\u9fff]+/g) ?? []) {
+    const chars = Array.from(run);
+    if (chars.length === 1) tokens.add(run);
+    for (let index = 0; index + 1 < chars.length; index += 1) tokens.add(chars[index] + chars[index + 1]);
+  }
+  return [...tokens];
+}
 
 export const TOPIC_PATTERN = /^[a-z0-9-]{2,40}$/;
 
@@ -247,9 +343,10 @@ export const DREAM_SYSTEM = [
   "2. 用户后续的纠正胜过先前的说法；矛盾时取后说的。",
   "3. 相对日期一律换算成绝对日期（源里每条消息带日期）。",
   "4. 每条 dream 最多 8 行，每行 <=120 字；写成「做了什么 / 为什么 / 结论」，不写心路历程。",
-  "5. 与「已有主题」重复的，op 用 noop，不要改写措辞再提一遍。",
-  "6. 猜测性内容一律不写。",
-  '7. 最多 5 条；没有值得记的就输出 {"dreams":[]}。',
+  "5. title 是这条笔记的名字，最多 35 字：概括主题、能当索引，不照抄整句，结尾不加句号。",
+  "6. 与「已有主题」重复的，op 用 noop，不要改写措辞再提一遍。",
+  "7. 猜测性内容一律不写。",
+  '8. 最多 5 条；没有值得记的就输出 {"dreams":[]}。',
   "topic_key 用小写英文或拼音加连字符，2-40 字符，例如 dsh-plugin-migration、postgres-backup。",
   "sources 必须指向素材里真实存在的会话标签与序号；没有来源的条目会被丢弃。",
 ].join("\n");
@@ -406,7 +503,7 @@ export function validateDreams({ dreams, material = "", sessions = [], existing 
     if (item.novelty === "low") return drop("low_novelty");
     if (rejectedTopics.has(topicKey)) return drop("rejected_topic");
 
-    const title = String(item.title ?? "").trim().slice(0, DREAM_LIMITS.maxTitle);
+    const title = clipTitle(item.title);
     const rawLines = asArray(item.lines).map((line) => String(line ?? "").trim()).filter((line) => line !== "");
     if (rawLines.length === 0) return drop("no_lines");
     // Half the lines truncated away is no longer the same text.

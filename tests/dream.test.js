@@ -7,15 +7,50 @@ import {
   DREAM_SCHEMA,
   buildDreamPrompt,
   buildTopicIndex,
+  clipTitle,
   collectMaterial,
   decideDream,
   dreamStateLine,
   identifiersOf,
   parseDreamAnswer,
   runDreamPass,
+  searchDreams,
   validateDreams,
 } from "../src/dream.js";
 import { MemoryStore } from "../src/store.js";
+
+test("notes are found by topic words, and the cue's own title ranks first", () => {
+  const notes = [
+    {
+      id: "a",
+      topicKey: "release-process",
+      title: "发布改成两步走",
+      body: "预发环境跑完整回归，通过后由值班的人手动上线。",
+      topics: ["发布流程"],
+      hitCount: 0,
+      updatedAt: "2026-11-01T00:00:00.000Z",
+    },
+    {
+      id: "b",
+      topicKey: "nginx-proxy",
+      title: "nginx 按 Host 选虚拟主机",
+      body: "proxy_pass 带变量要配 resolver，否则整站 502。",
+      topics: ["nginx"],
+      hitCount: 3,
+      updatedAt: "2026-11-02T00:00:00.000Z",
+    },
+  ];
+  assert.equal(searchDreams(notes, "release-process")[0].id, "a");
+  // A CJK phrase that never appears verbatim still lands, through bigrams.
+  assert.equal(searchDreams(notes, "发布流程")[0].id, "a");
+  assert.equal(searchDreams(notes, "nginx Host")[0].id, "b");
+  // A word that only lives in the body still counts, one step below the title.
+  assert.equal(searchDreams(notes, "resolver")[0].id, "b");
+  assert.equal(searchDreams(notes, "量子计算").length, 0);
+  assert.deepEqual(searchDreams(notes, "   "), []);
+  assert.equal(searchDreams(notes, "nginx", 1).length, 1);
+  assert.equal(searchDreams([{ id: "c", topicKey: "empty", title: "空", body: "" }], "空").length, 0, "a note with no body is not readable");
+});
 
 const dirs = [];
 function freshStore() {
@@ -175,6 +210,25 @@ test("validation drops what it cannot prove and flags what it cannot find", () =
   assert.equal(good.unverified, false);
   const fake = result.accepted.find((dream) => dream.topicKey === "k-fake");
   assert.equal(fake.unverified, true, "9.9.9 does not occur in the material");
+});
+
+test("a title past the limit is cut at a break and says so", () => {
+  // The two titles that were clipped at 30 characters in the live store: both
+  // stay whole now, because 32 characters is inside the accept window.
+  const hosting = "nginx 代理按 Host 选虚拟主机，$host 会 404";
+  assert.equal(clipTitle(hosting), hosting);
+  const resolver = "nginx proxy_pass 带变量必须配 resolver";
+  assert.equal(clipTitle(resolver), resolver);
+  // The prompt asks for 35; the parser accepts 45. Nothing inside is rewritten.
+  assert.equal(Array.from(clipTitle("字".repeat(35))).length, 35);
+  assert.equal(Array.from(clipTitle("字".repeat(45))).length, 45);
+  // Past the limit the tail is dropped at a boundary, never in the middle of a word.
+  const long = "nginx proxy_pass 带变量时必须配合 resolver 使用，否则请求会在解析阶段直接失败并返回 502";
+  const cut = clipTitle(long);
+  assert.ok(Array.from(cut).length <= 45, "a clipped title stays inside the limit");
+  assert.ok(cut.endsWith("…"), "a clipped title says it was clipped");
+  assert.ok(!cut.endsWith(" …"), "no dangling space before the ellipsis");
+  assert.ok(!cut.includes("否则"), "the cut falls at the break, not mid-clause");
 });
 
 test("the prompt names the known topics and the source ranges", () => {

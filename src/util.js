@@ -9,7 +9,7 @@ import { join } from "node:path";
 
 export const PLUGIN_ID = "dsh-fact-memory";
 /** SQLite schema generation of this build. Must equal `PRAGMA user_version`. */
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 /** Parser generation of the text projection: bump when extraction rules change. */
 export const PARSER_VERSION = "rules-2";
 

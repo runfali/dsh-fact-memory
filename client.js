@@ -177,7 +177,7 @@ window.__ModuleLoader__.load({
       "field.dreamBackfillMaxChars": "回填字符上限",
       "hint.dreamBackfillMaxChars": "一次历史回填最多往待整理队列里拷多少字符，防止把几个月的历史一次塞进来。",
       "field.dreamInjectMode": "提示方式",
-      "hint.dreamInjectMode": "cue = 当前话题命中已采纳的记录时，注入一行「有这篇记录」，不含正文、不冒充事实；off = 完全静默。检索仍只查事实，梦不会被当成事实带进上下文。",
+      "hint.dreamInjectMode": "cue = 当前话题命中已采纳的记录时，注入一行「有这篇记录」并给出 dream_read 该用的查询词，不含正文、不冒充事实；off = 不注入提示（dream_read 仍可调用）。检索仍只查事实，梦不会被当成事实带进上下文。",
       "field.dreamFocus": "整理时的关注点",
       "hint.dreamFocus": "写一句「希望它留意什么」，会进提示词；例如「只关心排障过程和结论」。留空则按默认目标整理。",
       "field.dreamMinChars": "触发阈值：未整理字数",
@@ -2042,6 +2042,11 @@ window.__ModuleLoader__.load({
       ".FM_pgCard{border:1px solid var(--dsw-alias-border-l2);border-radius:12px;padding:14px;background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;gap:9px}" +
       ".FM_pgCardDanger{border-color:rgba(220,80,80,.35)}" +
       ".FM_pgCardHead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}" +
+      ".FM_pgNoteHead{cursor:pointer;user-select:none}" +
+      ".FM_pgNoteHead:hover strong{text-decoration:underline;text-underline-offset:2px}" +
+      ".FM_pgNoteHead:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px;border-radius:6px}" +
+      ".FM_pgNoteDetail{display:flex;flex-direction:column;gap:3px;margin-top:2px;padding-top:6px;border-top:1px dashed var(--dsw-alias-border-l2)}" +
+      ".FM_pgNoteSources{margin:0;font-size:11px;line-height:1.6;color:var(--dsw-alias-label-tertiary);word-break:break-word}" +
       ".FM_pgDiff{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:14px}" +
       ".FM_pgDiffOld{color:var(--dsw-alias-label-tertiary);text-decoration:line-through;text-decoration-thickness:1px}" +
       ".FM_pgArrow{color:var(--dsw-alias-label-tertiary)}" +
@@ -2095,7 +2100,7 @@ window.__ModuleLoader__.load({
       ".FM_pgQueueChips{display:flex;gap:6px;flex-wrap:wrap}" +
       ".FM_pgQueueConfig{margin:0;font-size:11px}" +
       ".FM_pgQueueList{display:flex;flex-direction:column;border:1px solid var(--dsw-alias-border-l2);border-radius:11px;overflow:hidden;background:var(--dsw-alias-bg-layer-1)}" +
-      ".FM_pgQueueRow{display:grid;grid-template-columns:96px minmax(120px,1fr) minmax(90px,auto) auto;align-items:center;gap:10px;padding:9px 12px;font-size:12px;border-bottom:1px solid var(--dsw-alias-border-l2)}" +
+      ".FM_pgQueueRow{display:grid;grid-template-columns:96px minmax(120px,1fr) minmax(90px,auto) auto auto;align-items:center;gap:10px;padding:9px 12px;font-size:12px;border-bottom:1px solid var(--dsw-alias-border-l2)}" +
       ".FM_pgQueueRow:last-child{border-bottom:none}" +
       ".FM_pgQueueSession{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary)}" +
       ".FM_pgQueueMeta{font-size:11px;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;white-space:nowrap}" +
@@ -2108,6 +2113,20 @@ window.__ModuleLoader__.load({
       ".FM_pgQueueRowClick:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}" +
       ".FM_pgQueueCaret{font-size:10px;color:var(--dsw-alias-label-tertiary);transition:transform .16s ease}" +
       ".FM_pgQueueCaretOn{transform:rotate(90deg)}" +
+      ".FM_pgDreamRowWrap{display:flex;flex-direction:column;border-bottom:1px solid var(--dsw-alias-border-l2)}" +
+      ".FM_pgDreamRow{display:grid;grid-template-columns:12px minmax(160px,1fr) auto auto auto;align-items:center;gap:10px;padding:9px 12px;font-size:12px;cursor:pointer}" +
+      ".FM_pgDreamRow:hover{background:var(--dsw-alias-bg-layer-2)}" +
+      ".FM_pgDreamRow:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}" +
+      ".FM_pgDreamRowOn{background:var(--dsw-alias-bg-layer-2)}" +
+      ".FM_pgDreamRowTitle{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-primary);font-size:12px;font-weight:600;min-width:0}" +
+      ".FM_pgIndexRow{display:grid;grid-template-columns:minmax(160px,1fr) auto auto auto auto;align-items:center;gap:10px;padding:8px 12px;font-size:12px;border-bottom:1px solid var(--dsw-alias-border-l2)}" +
+      ".FM_pgIndexRow:last-child{border-bottom:none}" +
+      ".FM_pgPager{display:flex;align-items:center;gap:4px;flex-wrap:wrap;padding:9px 12px}" +
+      ".FM_pgPagerBtn{appearance:none;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;line-height:1;min-width:26px;height:24px;padding:0 6px;border-radius:7px;cursor:pointer;font-variant-numeric:tabular-nums}" +
+      ".FM_pgPagerBtn:hover:not(:disabled){border-color:var(--dsw-alias-brand-primary)}" +
+      ".FM_pgPagerBtn:disabled{opacity:.45;cursor:default}" +
+      ".FM_pgPagerBtnOn{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);font-weight:600}" +
+      ".FM_pgPagerGap{font-size:11px;color:var(--dsw-alias-label-tertiary);padding:0 2px}" +
       ".FM_pgQueueDetail{display:flex;flex-direction:column;gap:8px;padding:10px 12px 12px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2)}" +
       ".FM_pgQueueDetailHead{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}" +
       ".FM_pgQueueNote{margin:0;font-size:11.5px;line-height:1.6;color:var(--dsw-alias-label-secondary)}" +
@@ -2306,6 +2325,13 @@ window.__ModuleLoader__.load({
       "page.dream.validFrom": "自 {date}",
       "page.dream.validRange": "{from} → {to}",
       "page.dream.hits": "命中 {n}",
+      "page.dream.reads": "读过 {n}",
+      "page.dream.pagePrev": "上一页",
+      "page.dream.pageNext": "下一页",
+      "page.dream.detailMeta": "主题键 {key} · 记录于 {created} · 自 {from}",
+      "page.dream.topics": "主题：{list}",
+      "page.dream.sourceLine": "来源：{list}",
+      "page.dream.sourceUnnamed": "未知会话",
       "page.dream.archivedTitle": "已归档",
       "page.dream.archivedHint": "{days} 天没在对话里命中会自动归档；记录没删，随时可以恢复。",
       "page.dream.restore": "恢复",
@@ -2610,6 +2636,13 @@ window.__ModuleLoader__.load({
       "page.dream.validFrom": "since {date}",
       "page.dream.validRange": "{from} → {to}",
       "page.dream.hits": "{n} hits",
+      "page.dream.reads": "{n} reads",
+      "page.dream.pagePrev": "Previous page",
+      "page.dream.pageNext": "Next page",
+      "page.dream.detailMeta": "key {key} · recorded {created} · since {from}",
+      "page.dream.topics": "Topics: {list}",
+      "page.dream.sourceLine": "Sources: {list}",
+      "page.dream.sourceUnnamed": "unknown session",
       "page.dream.archivedTitle": "Archived",
       "page.dream.archivedHint": "Archived after {days} days without a mention; nothing was deleted and any note can be restored.",
       "page.dream.restore": "Restore",
@@ -2906,7 +2939,7 @@ window.__ModuleLoader__.load({
         queue: { loading: false, data: null, error: null, auto: 0, retry: null, expanded: { id: "", loading: false, data: null, error: null, shown: RUN_TEXT_CHUNK } },
         // The dream tab is a review surface: loaded on entry, after every action,
         // and never polled — a classic pass is minutes apart.
-        dream: { loading: false, data: null, error: null, focus: "", busy: "", open: "", draftTitle: "", draftBody: "", notice: null, confirmBackfill: false },
+        dream: { loading: false, data: null, error: null, focus: "", busy: "", open: "", openNote: "", notePage: 1, indexPage: 1, archivedPage: 1, draftTitle: "", draftBody: "", notice: null, confirmBackfill: false },
         status: null,
         // "New since you last looked", frozen at the moment the queue was opened:
         // marking it seen clears the server-side count, so the page keeps its own
@@ -3646,6 +3679,19 @@ window.__ModuleLoader__.load({
           },
         });
       };
+      // Opening an accepted note is read-only: it changes what is shown, never the
+      // store, so it needs no request and no confirmation.
+      const toggleDreamNote = (id) => {
+        const current = store.getSnapshot().dream;
+        patch({ dream: { ...current, openNote: current.openNote === id ? "" : String(id ?? "") } });
+      };
+      // Paging is local: the lists are already in memory, so turning a page is a
+      // re-render and never a request.
+      const setDreamPage = (kind, page) => {
+        const current = store.getSnapshot().dream;
+        const key = kind === "index" ? "indexPage" : "notePage";
+        patch({ dream: { ...current, [key]: Math.max(1, Number(page) || 1) } });
+      };
       const indexVectors = () => {
         patch({ op: { status: "running", kind: "vectors" } });
         return postJson("index-vectors", { ...fence() }, { timeoutMs: 120000 }).then((payload) => {
@@ -3670,7 +3716,7 @@ window.__ModuleLoader__.load({
             conflicts: { loading: false, groups: [], error: null },
             graph: { entity: "", view: store.getSnapshot().graph.view, loading: true, data: null, error: null },
             queue: { loading: true, data: null, error: null, auto: store.getSnapshot().queue.auto, retry: null, expanded: { id: "", loading: false, data: null, error: null, shown: RUN_TEXT_CHUNK } },
-            dream: { loading: false, data: null, error: null, focus: "", busy: "", open: "", draftTitle: "", draftBody: "", notice: null, confirmBackfill: false },
+            dream: { loading: false, data: null, error: null, focus: "", busy: "", open: "", openNote: "", notePage: 1, indexPage: 1, archivedPage: 1, draftTitle: "", draftBody: "", notice: null, confirmBackfill: false },
           });
           return refreshAll()
             .then(() => loadGraph("", store.getSnapshot().graph.view))
@@ -3728,6 +3774,8 @@ window.__ModuleLoader__.load({
           setDreamFocus,
           setDreamDraft,
           toggleDream,
+          toggleDreamNote,
+        setDreamPage,
           backfillDream,
           restoreDream,
           setDreamBackfill,
@@ -6502,22 +6550,135 @@ window.__ModuleLoader__.load({
           row.id,
         );
       };
-      const activeRow = (row) =>
-        jsxs(
+      // Titles only: sixteen notes with three hundred characters of preview each
+      // pushed everything else off the screen, and reading a title is all that is
+      // needed to decide whether to open it.
+      const activeRow = (row) => {
+        const open = dream.openNote === row.id;
+        const body = String(row.body ?? "");
+        const sources = Array.isArray(row.sources) ? row.sources : [];
+        const sourceText = sources
+          .map((source) => {
+            const where = [source.label, source.sessionId]
+              .filter((part) => part !== undefined && part !== null && part !== "")
+              .join(" · ");
+            const span = source.fromSeq !== undefined && source.toSeq !== undefined ? " · " + source.fromSeq + "–" + source.toSeq : "";
+            return (where === "" ? t("page.dream.sourceUnnamed") : where) + span;
+          })
+          .join("；");
+        return jsxs(
           "div",
           {
-            className: "FM_pgQueueRow",
+            className: "FM_pgDreamRowWrap",
             children: [
-              jsx("span", { className: "FM_pgQueueSession", children: row.title || row.topicKey }),
-              jsx("span", { className: "FM_pgQueueMeta", children: shortTime(row.updatedAt, zone) }),
-              jsx("span", { className: "FM_pgQueueMeta", children: t(row.novelty === "high" ? "page.dream.novelty.high" : "page.dream.novelty.low") }),
-              // How often a real conversation pointed at this note. Zero is the
-              // honest default, not an error.
-              jsx("span", { className: "FM_pgQueueMeta", children: t("page.dream.hits", { n: Number(row.hitCount ?? 0) }) }),
+              jsxs("div", {
+                className: "FM_pgDreamRow" + (open ? " FM_pgDreamRowOn" : ""),
+                role: "button",
+                tabIndex: 0,
+                "aria-expanded": open,
+                onClick: () => actions.toggleDreamNote(row.id),
+                onKeyDown: (event) => {
+                  if (event.key !== "Enter" && event.key !== " ") return;
+                  event.preventDefault();
+                  actions.toggleDreamNote(row.id);
+                },
+                children: [
+                  jsx("span", { className: "FM_pgQueueCaret" + (open ? " FM_pgQueueCaretOn" : ""), children: "▸" }),
+                  jsx("strong", {
+                    className: "FM_pgDreamRowTitle",
+                    title: row.title || row.topicKey,
+                    children: row.title || row.topicKey,
+                  }),
+                  // Hits say the topic came up; reads say the model opened the note.
+                  jsx("span", { className: "FM_pgQueueMeta", children: t("page.dream.hits", { n: Number(row.hitCount ?? 0) }) }),
+                  jsx("span", { className: "FM_pgQueueMeta", children: t("page.dream.reads", { n: Number(row.readCount ?? 0) }) }),
+                  jsx("span", { className: "FM_pgQueueMeta", children: shortTime(row.updatedAt ?? row.createdAt, zone) }),
+                ],
+              }),
+              open
+                ? jsxs("div", {
+                    className: "FM_pgNoteDetail",
+                    children: [
+                      jsx("p", { className: "FM_pgDreamBody", children: body }),
+                      jsx("p", {
+                        className: "FM_pgNoteSources",
+                        children: t("page.dream.detailMeta", {
+                          key: String(row.topicKey ?? ""),
+                          created: shortTime(row.createdAt, zone),
+                          from: row.validFrom ? String(row.validFrom).slice(0, 10) : "—",
+                        }),
+                      }),
+                      row.unverified ? jsx("p", { className: "FM_pgNoteSources", children: t("page.dream.unverified") }) : null,
+                      Array.isArray(row.topics) && row.topics.length > 0
+                        ? jsx("p", { className: "FM_pgNoteSources", children: t("page.dream.topics", { list: row.topics.join("、") }) })
+                        : null,
+                      sources.length > 0
+                        ? jsx("p", { className: "FM_pgNoteSources", children: t("page.dream.sourceLine", { list: sourceText }) })
+                        : null,
+                    ],
+                  })
+                : null,
             ],
           },
           row.id,
         );
+      };
+      // Real page numbers: a "load more" button never says how much is left and
+      // cannot take the reader back to the page they were on.
+      const pager = (total, size, page, onPick) => {
+        const pages = Math.max(1, Math.ceil(total / size));
+        if (pages <= 1) return null;
+        const slots = [];
+        for (let n = 1; n <= pages; n += 1) {
+          if (pages <= 9 || n === 1 || n === pages || Math.abs(n - page) <= 1) slots.push(n);
+          else if (slots[slots.length - 1] !== "gap") slots.push("gap");
+        }
+        return jsxs("div", {
+          className: "FM_pgPager",
+          children: [
+            jsx("button", {
+              className: "FM_pgPagerBtn",
+              type: "button",
+              disabled: page <= 1,
+              title: t("page.dream.pagePrev"),
+              "aria-label": t("page.dream.pagePrev"),
+              onClick: () => onPick(page - 1),
+              children: "‹",
+            }),
+            ...slots.map((slot, index) =>
+              slot === "gap"
+                ? jsx("span", { className: "FM_pgPagerGap", children: "…" }, "gap" + index)
+                : jsx(
+                    "button",
+                    {
+                      className: "FM_pgPagerBtn" + (slot === page ? " FM_pgPagerBtnOn" : ""),
+                      type: "button",
+                      "aria-current": slot === page ? "page" : undefined,
+                      onClick: () => onPick(slot),
+                      children: String(slot),
+                    },
+                    "p" + slot,
+                  ),
+            ),
+            jsx("button", {
+              className: "FM_pgPagerBtn",
+              type: "button",
+              disabled: page >= pages,
+              title: t("page.dream.pageNext"),
+              "aria-label": t("page.dream.pageNext"),
+              onClick: () => onPick(page + 1),
+              children: "›",
+            }),
+          ],
+        });
+      };
+      // Fifteen notes and ten index rows per page: enough to scan, few enough that
+      // the pending queue below never scrolls away.
+      const NOTES_PER_PAGE = 15;
+      const INDEX_PER_PAGE = 10;
+      const notePageCount = Math.max(1, Math.ceil(active.length / NOTES_PER_PAGE));
+      const notePage = Math.min(Math.max(1, Number(dream.notePage ?? 1) || 1), notePageCount);
+      const notesShown = active.slice((notePage - 1) * NOTES_PER_PAGE, notePage * NOTES_PER_PAGE);
       const archivedRow = (row) =>
         jsxs(
           "div",
@@ -6605,6 +6766,9 @@ window.__ModuleLoader__.load({
       // The topic index is a map of what exists, generated by rule from the live
       // notes: it never summarizes and never invents a topic that is not a row.
       const indexLines = Array.isArray(data?.index) ? data.index : [];
+      const indexPageCount = Math.max(1, Math.ceil(indexLines.length / INDEX_PER_PAGE));
+      const indexPage = Math.min(Math.max(1, Number(dream.indexPage ?? 1) || 1), indexPageCount);
+      const indexShown = indexLines.slice((indexPage - 1) * INDEX_PER_PAGE, indexPage * INDEX_PER_PAGE);
       const indexBlock =
         indexLines.length === 0
           ? null
@@ -6612,15 +6776,16 @@ window.__ModuleLoader__.load({
               className: "FM_pgDreamList",
               children: [
                 jsx("h3", { className: "FM_pgRailLabel", children: t("page.dream.indexTitle") }),
-                ...indexLines.map((row) =>
+                ...indexShown.map((row) =>
                   jsxs(
                     "div",
                     {
-                      className: "FM_pgQueueRow",
+                      className: "FM_pgIndexRow",
                       children: [
-                        jsx("span", { className: "FM_pgQueueSession", children: row.title }),
+                        jsx("span", { className: "FM_pgDreamRowTitle", title: row.title, children: row.title }),
                         jsx("span", { className: "FM_pgQueueMeta", children: row.topicKey }),
                         jsx("span", { className: "FM_pgQueueMeta", children: t("page.dream.hits", { n: Number(row.hitCount ?? 0) }) }),
+                        jsx("span", { className: "FM_pgQueueMeta", children: t("page.dream.reads", { n: Number(row.readCount ?? 0) }) }),
                         row.validFrom
                           ? jsx("span", { className: "FM_pgQueueMeta", children: t("page.dream.validFrom", { date: String(row.validFrom).slice(0, 10) }) })
                           : null,
@@ -6629,8 +6794,14 @@ window.__ModuleLoader__.load({
                     row.topicKey,
                   ),
                 ),
+                pager(indexLines.length, INDEX_PER_PAGE, indexPage, (page) => actions.setDreamPage("index", page)),
               ],
             });
+      // The archive is history: it is read the same way, ten rows at a time.
+      const archivedAll = Array.isArray(data?.archived) ? data.archived : [];
+      const archivedPages = Math.max(1, Math.ceil(archivedAll.length / INDEX_PER_PAGE));
+      const archivedPage = Math.min(Math.max(1, Number(dream.archivedPage ?? 1) || 1), archivedPages);
+      const archivedShown = archivedAll.slice((archivedPage - 1) * INDEX_PER_PAGE, archivedPage * INDEX_PER_PAGE);
       if (!data && dream.loading) return jsx("p", { className: "FM_pgMuted", children: t("page.loading") });
       if (data && data.enabled === false) {
         return jsxs("div", {
@@ -6648,24 +6819,32 @@ window.__ModuleLoader__.load({
           // A paused layer looks exactly like an idle one; say so, and say how it
           // is cleared, or the feature silently dies after three bad passes.
           data?.paused ? jsx("p", { className: "FM_pgMuted", children: t("page.dream.paused") }) : null,
-          // The map comes first: what exists, then what needs a decision.
-          indexBlock,
-          jsx("h3", { className: "FM_pgRailLabel", children: t("page.dream.pendingTitle") }),
-          pending.length === 0
-            ? jsx("p", { className: "FM_pgMuted", children: t("page.dream.empty") })
-            : jsx("div", { className: "FM_pgDreamList", children: pending.map(card) }),
+          // What the model can read comes first. The old order led with the topic
+          // index, so with sixteen notes the accepted list sat below the fold.
           jsx("h3", { className: "FM_pgRailLabel", children: t("page.dream.activeTitle") }),
           active.length === 0
             ? jsx("p", { className: "FM_pgMuted", children: t("page.dream.noActive") })
-            : jsx("div", { className: "FM_pgDreamList", children: active.map(activeRow) }),
-          // One page of rows is all the route returns; a list that stops at twenty
-          // without saying so reads as "that is everything".
+            : jsxs("div", {
+                className: "FM_pgDreamList",
+                children: [
+                  ...notesShown.map(activeRow),
+                  pager(active.length, NOTES_PER_PAGE, notePage, (page) => actions.setDreamPage("note", page)),
+                ],
+              }),
+          // Only reachable when the route's own cap bites: the pager counts what it
+          // received, so say the rest exists rather than ending the list silently.
           Number(data?.counts?.active ?? 0) > active.length
             ? jsx("p", {
                 className: "FM_pgMuted",
                 children: t("page.dream.activeMore", { n: Number(data.counts.active), shown: active.length }),
               })
             : null,
+          jsx("h3", { className: "FM_pgRailLabel", children: t("page.dream.pendingTitle") }),
+          pending.length === 0
+            ? jsx("p", { className: "FM_pgMuted", children: t("page.dream.empty") })
+            : jsx("div", { className: "FM_pgDreamList", children: pending.map(card) }),
+          // The map is a navigation aid now that the notes themselves are above it.
+          indexBlock,
           Number(data?.counts?.archived ?? 0) > 0
             ? jsxs("div", {
                 children: [
@@ -6674,14 +6853,17 @@ window.__ModuleLoader__.load({
                     className: "FM_pgMuted",
                     children: t("page.dream.archivedHint", { days: Number(data?.archiveAfterDays ?? 0) }),
                   }),
-                  jsx("div", { className: "FM_pgDreamList", children: (Array.isArray(data?.archived) ? data.archived : []).map(archivedRow) }),
-                  Number(data?.counts?.archived ?? 0) > (Array.isArray(data?.archived) ? data.archived.length : 0)
+                  jsxs("div", {
+                    className: "FM_pgDreamList",
+                    children: [
+                      ...archivedShown.map(archivedRow),
+                      pager(archivedAll.length, INDEX_PER_PAGE, archivedPage, (page) => actions.setDreamPage("archived", page)),
+                    ],
+                  }),
+                  Number(data?.counts?.archived ?? 0) > archivedAll.length
                     ? jsx("p", {
                         className: "FM_pgMuted",
-                        children: t("page.dream.activeMore", {
-                          n: Number(data.counts.archived),
-                          shown: Array.isArray(data?.archived) ? data.archived.length : 0,
-                        }),
+                        children: t("page.dream.activeMore", { n: Number(data.counts.archived), shown: archivedAll.length }),
                       })
                     : null,
                 ],

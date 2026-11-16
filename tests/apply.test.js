@@ -139,7 +139,7 @@ function boot(overrides = {}) {
 
 test("apply registers the three tools, the context and the routes", () => {
   const { ctx } = boot();
-  assert.deepEqual([...ctx.__tools.keys()].sort(), ["memory_forget", "memory_search", "memory_write"]);
+  assert.deepEqual([...ctx.__tools.keys()].sort(), ["dream_read", "memory_forget", "memory_search", "memory_write"]);
   assert.equal(ctx.__contexts.length, 1);
   assert.equal(ctx.__contexts[0].name, "dsh-fact-memory:directory");
   assert.equal(ctx.__contexts[0].required, true);
@@ -529,7 +529,13 @@ test("pre-step injects one notice per turn and honours the switch", async () => 
   const second = await handler({ messages: [fresh], turn: 1, step: 2 }, next);
   assert.equal(second.messages.length, 1, "a later step of the same turn repeats nothing");
 
-  const third = await handler({ messages: [fresh], turn: 2, step: 1 }, next);
+  // A real next turn carries a new user message, and that is what the notice
+  // dedupe keys on.
+  const nextMessage = { ...fresh, id: "m2" };
+  const third = await handler(
+    { messages: [nextMessage], turn: 2, step: 1 },
+    async () => ({ kind: "enter", messages: [nextMessage] }),
+  );
   assert.equal(third.messages.length, 2, "the next turn gets one again");
   ctx.__dispose();
 
@@ -562,18 +568,44 @@ test("a leftover pre-step listener cannot double the notice", async () => {
   ctx.__dispose();
 });
 
+test("two live agents on one session still write one notice for a message", async () => {
+  const { ctx } = boot();
+  ctx.__agent("s-two");
+  // A model switch re-creates the agent while the session and its turn counter
+  // carry on, and both agents can reach pre-step for the same user message. That
+  // was the duplicate: one notice per agent, two in the transcript.
+  ctx.__agent("s-two");
+  const [first, second] = ctx.__preStep("s-two");
+  assert.equal(ctx.__preStep("s-two").length, 2, "both agents are hooked");
+  const fresh = { id: "m-two", role: "user", content: [{ type: "text", text: "你好" }], source: { kind: "user" } };
+  const base = async () => ({ kind: "enter", messages: [fresh] });
+  const inner = await second({ messages: [fresh], turn: 30, step: 1 }, base);
+  const outer = await first({ messages: [fresh], turn: 30, step: 1 }, async () => inner);
+  assert.equal(
+    outer.messages.filter((message) => message?.source?.kind === "plugin:dsh-fact-memory").length,
+    1,
+    "one notice for the message, however many agents answer it",
+  );
+  // The next message still gets its own notice from whichever agent handles it.
+  const later = { ...fresh, id: "m-two-later" };
+  const again = await first({ messages: [later], turn: 30, step: 1 }, async () => ({ kind: "enter", messages: [later] }));
+  assert.equal(again.messages.length, 2, "a new message gets a new notice");
+  ctx.__dispose();
+});
+
 test("autoCapture is off by default and writes when switched on", async () => {
   const quietBoot = boot();
-  quietBoot.ctx.__agent("s1");
-  const quietHandler = quietBoot.ctx.__preStep("s1")[0];
-  const text = { id: "m1", role: "user", content: [{ type: "text", text: "记住：api 的端口是 8080" }], source: { kind: "user" } };
-  await quietHandler({ messages: [text], step: 0 }, async () => ({ kind: "enter", messages: [text] }));
+  quietBoot.ctx.__agent("s-auto-quiet");
+  const quietHandler = quietBoot.ctx.__preStep("s-auto-quiet")[0];
+  const quietText = { id: "m-auto-quiet", role: "user", content: [{ type: "text", text: "记住：api 的端口是 8080" }], source: { kind: "user" } };
+  await quietHandler({ messages: [quietText], step: 0 }, async () => ({ kind: "enter", messages: [quietText] }));
   assert.equal((await quietBoot.ctx.__tools.get("memory_search").execute({ query: "8080" })).outcome, "not_found");
   quietBoot.ctx.__dispose();
 
   const loud = boot({ autoCapture: true });
-  loud.ctx.__agent("s1");
-  const handler = loud.ctx.__preStep("s1")[0];
+  loud.ctx.__agent("s-auto-loud");
+  const handler = loud.ctx.__preStep("s-auto-loud")[0];
+  const text = { id: "m-auto-loud", role: "user", content: [{ type: "text", text: "记住：api 的端口是 8080" }], source: { kind: "user" } };
   await handler({ messages: [text], step: 0 }, async () => ({ kind: "enter", messages: [text] }));
   const hit = await loud.ctx.__tools.get("memory_search").execute({ query: "8080" });
   assert.equal(hit.outcome, "ok");
@@ -908,25 +940,25 @@ test("the reminder body is cut to the configured character budget", async () => 
   // A zero budget is the documented "no body" setting, and a small one must
   // actually shrink the notice — it used to be read by nothing at all.
   const mute = boot({ injectReminder: true, reminderBudgetTokens: 0 });
-  mute.ctx.__agent("s1");
-  const cue = { id: "m1", role: "user", content: [{ type: "text", text: "你记得我的偏好吗" }], source: { kind: "user" } };
-  const silent = await mute.ctx.__preStep("s1")[0]({ messages: [cue], step: 0 }, async () => ({ kind: "enter", messages: [cue] }));
+  mute.ctx.__agent("s-budget-mute");
+  const cue = (id) => ({ id, role: "user", content: [{ type: "text", text: "你记得我的偏好吗" }], source: { kind: "user" } });
+  const silent = await mute.ctx.__preStep("s-budget-mute")[0]({ messages: [cue("m-budget-mute")], step: 0 }, async () => ({ kind: "enter", messages: [cue("m-budget-mute")] }));
   assert.equal(silent.messages.length, 1, "a zero budget injects nothing");
   mute.ctx.__dispose();
 
   // The setting counts tokens, and the panel's own conversion is 2 characters per
   // token (budgetChars), so 8 tokens = 16 code points.
   const tiny = boot({ injectReminder: true, reminderBudgetTokens: 8 });
-  tiny.ctx.__agent("s1");
-  const short = await tiny.ctx.__preStep("s1")[0]({ messages: [cue], step: 0 }, async () => ({ kind: "enter", messages: [cue] }));
+  tiny.ctx.__agent("s-budget-tiny");
+  const short = await tiny.ctx.__preStep("s-budget-tiny")[0]({ messages: [cue("m-budget-tiny")], step: 0 }, async () => ({ kind: "enter", messages: [cue("m-budget-tiny")] }));
   assert.equal(short.messages.length, 2);
   const body = short.messages[1].content.map((part) => part.text ?? "").join("");
   assert.ok(Array.from(body).length <= budgetChars(8), `notice body stays inside the budget, saw ${Array.from(body).length}`);
   tiny.ctx.__dispose();
 
   const roomy = boot({ injectReminder: true, reminderBudgetTokens: 300 });
-  roomy.ctx.__agent("s1");
-  const long = await roomy.ctx.__preStep("s1")[0]({ messages: [cue], step: 0 }, async () => ({ kind: "enter", messages: [cue] }));
+  roomy.ctx.__agent("s-budget-roomy");
+  const long = await roomy.ctx.__preStep("s-budget-roomy")[0]({ messages: [cue("m-budget-roomy")], step: 0 }, async () => ({ kind: "enter", messages: [cue("m-budget-roomy")] }));
   const full = long.messages[1].content.map((part) => part.text ?? "").join("");
   assert.ok(Array.from(full).length > Array.from(body).length, "a small budget really cuts the text");
   roomy.ctx.__dispose();

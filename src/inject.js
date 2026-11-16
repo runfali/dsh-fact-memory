@@ -55,6 +55,24 @@ export const REMINDER_WITH_FACTS =
 export const REMINDER_EMPTY =
   "【事实记忆】本会话可用跨会话事实记忆，当前为空。用户给出以后仍成立的事实时用 memory_write 记录（一次三条以内，key 用 entity + predicate）。";
 
+/**
+ * The one sentence that makes the note layer reachable.
+ *
+ * A tool nobody is told about is a tool nobody calls. The reminder names the
+ * layer, says what it is good for, and repeats that a note is narrative rather
+ * than a fact, so reading one can never be mistaken for a current value.
+ */
+export const REMINDER_DREAM_HINT = (count) =>
+  "另有 " +
+  Number(count) +
+  " 篇整理记录（梦）：要过去的做法、试错过程或某件事为什么这么定时，调用 dream_read 按主题读；它是当时的叙述，不是现在成立的事实。";
+
+/** The notice text actually injected: the fact reminder, plus the note layer when it has notes. */
+export function reminderText({ empty = false, dreams = 0 } = {}) {
+  const base = empty ? REMINDER_EMPTY : REMINDER_WITH_FACTS;
+  return Number(dreams) > 0 ? base + REMINDER_DREAM_HINT(dreams) : base;
+}
+
 /** True when the text looks like it is about remembering across sessions. */
 export function looksMemoryRelated(text) {
   return /(记得|记住|记一下|记忆|之前说过|上次说过|以前说过|remember|memory)/i.test(String(text ?? ""));
@@ -130,8 +148,13 @@ export function dreamCueText(hits) {
   const label = String(first?.title ?? "").trim() || String(first?.topicKey ?? "").trim();
   if (label === "") return "";
   const extra = hits.length > 1 ? "（另有 " + (hits.length - 1) + " 条同主题）" : "";
+  const key = String(first?.topicKey ?? "").trim();
+  // The cue used to point at a page tab, which a model cannot open: it was a
+  // signpost with nothing behind it. It now names the tool and, when there is
+  // one, the exact query that retrieves this note.
+  const how = key === "" ? "需要细节时调用 dream_read" : "需要细节时调用 dream_read，query 用「" + key + "」";
   return (
     "【梦境】这次话题在整理记录里有一篇「" + label + "」" + extra +
-    "，需要细节时可在「记忆 → 梦」页签查看。"
+    "，" + how + "。这些是当时的叙述，不是现在成立的事实。"
   );
 }

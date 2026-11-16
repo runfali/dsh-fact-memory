@@ -45,14 +45,7 @@ import {
 import { claimKeyOf, qualifierKey, MemoryStore, visibleSql } from "./src/store.js";
 import { NOTE_PREDICATE, extractFacts, isMemoryRequest } from "./src/extract.js";
 import { renderHits, search } from "./src/retrieve.js";
-import {
-  REMINDER_EMPTY,
-  REMINDER_WITH_FACTS,
-  buildDirectory,
-  dreamCueHits,
-  dreamCueText,
-  messageText,
-} from "./src/inject.js";
+import { buildDirectory, dreamCueHits, dreamCueText, messageText, reminderText } from "./src/inject.js";
 import { commitImport, exportFile, previewImport } from "./src/jsonl.js";
 import { registerJsonRoute } from "./src/routes.js";
 import {
@@ -64,6 +57,7 @@ import {
   dreamStateLine,
   pruneFeed,
   runDreamPass,
+  searchDreams,
 } from "./src/dream.js";
 import { backfillSessions } from "./src/backfill.js";
 import { applyProposal, createProposal, getProposal, listProposals, pruneProposal, rejectProposal, reviseProposal } from "./src/proposals.js";
@@ -99,14 +93,27 @@ const MAX_VALUE_CHARS = 500;
 const MAX_SESSIONS = 500;
 
 /**
- * sessionId → { agent, turn }: the turn whose reminder was already injected.
+ * sessionId → { key }: the user message (or, on hosts that carry no message id,
+ * the turn) that already got the reminder.
  *
- * Module scope, not apply scope. The notice is per turn now, so a plugin
- * restart (whose listener can survive on the agent's own ctx) must not inject a
- * second one inside a turn that already got one. The agent is part of the key
- * because a resumed session gets a fresh agent whose turn counter restarts at 1.
+ * Keyed on the message, not on the agent. A model switch mid-session re-creates
+ * the agent that handles the next turn, and for one turn two live agents can
+ * both reach pre-step; keying on the agent let each of them inject its own copy
+ * of the same notice (session-f2559fd3, seq 5550/5551). Keying on the message
+ * makes the second one a no-op no matter how many agents, modules or listeners
+ * see it, while a resumed session — whose turn counter restarts at 1 — still
+ * gets its notice because the message is new.
  */
 const notifiedTurns = new Map();
+
+/**
+ * Disposers of every pre-step listener this module instance installed on an
+ * agent's own ctx, plus the agents already hooked, so the two install paths
+ * (agent/created and the existing-agent backfill) cannot register twice and an
+ * unload cannot leave a listener that a reload would double up with.
+ */
+const agentHookDisposers = new Set();
+const hookedAgents = new WeakSet();
 
 /**
  * A delegated subagent session is a worker, not a source of durable user
@@ -1640,6 +1647,145 @@ function apply(ctx, config) {
     });
     return dispose;
   }, "dsh-fact-memory: memory_forget");
+
+  ctx.effect(() => {
+    const dispose = ctx.tools.register({
+      name: "dream_read",
+      description:
+        "Read notes from the dream layer: prose distilled from earlier conversations about what was tried, what broke and why, and where the work stopped. Call it when a 【梦境】 cue names a note, when the user asks how something was done before or why a choice was made, or when the history behind a decision matters. Pass topic words or the topic key the cue gave you; with no query it lists the notes that exist. These notes are narrative, not facts — they can be outdated, so never present one as the current state; for current values use memory_search.",
+      parameters: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          query: {
+            type: "string",
+            description: "Topic words or a topic key, e.g. \"nginx 代理\" or \"release-process\". Omit to list the notes that exist.",
+          },
+          limit: { type: "number", description: "Notes to return, 1-5. Defaults to 3." },
+        },
+      },
+      output: {
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["outcome", "message", "count", "rendered"],
+          properties: {
+            outcome: { type: "string", enum: ["ok", "not_found", "unavailable"] },
+            message: { type: "string" },
+            count: { type: "number" },
+            rendered: { type: "string" },
+            items: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["id", "topicKey", "title", "body", "updatedAt", "readCount"],
+                properties: {
+                  id: { type: "string" },
+                  topicKey: { type: "string" },
+                  title: { type: "string" },
+                  body: { type: "string" },
+                  updatedAt: { type: "string" },
+                  readCount: { type: "number" },
+                },
+              },
+            },
+          },
+        },
+        render: (_args, value) => textResult(value),
+      },
+      isConcurrencySafe: true,
+      execute: async (args) => {
+        const cfg = live();
+        const off = (message) => ({ outcome: "unavailable", message, count: 0, rendered: "" });
+        if (cfg.enabled === false) return off("事实记忆已关闭（enabled = false）");
+        const handle = handleFor(cfg);
+        if (!handle.store) return off(`事实记忆暂不可用：${handle.error}`);
+        const store = handle.store;
+        let notes;
+        try {
+          notes = store.dreams({ status: ["active"], limit: 200, order: "heat" });
+        } catch (error) {
+          return off(`梦层暂时读不出来：${oneLine(error)}`);
+        }
+        if (notes.length === 0) {
+          // Pending notes are deliberately invisible here: they have not been
+          // accepted yet, so quoting one would hand the model a draft as history.
+          return {
+            outcome: "not_found",
+            message: "梦层还没有已采纳的整理记录（待确认的记录不算，它们还没被采纳）。",
+            count: 0,
+            rendered: "（没有记录）",
+          };
+        }
+        const shape = (dream) => ({
+          id: String(dream.id ?? ""),
+          topicKey: String(dream.topicKey ?? ""),
+          title: String(dream.title ?? ""),
+          body: String(dream.body ?? ""),
+          updatedAt: String(dream.updatedAt ?? ""),
+          readCount: Number(dream.readCount ?? 0),
+        });
+        const query = String(args?.query ?? "").trim();
+        // No query is a legitimate call: "what notes are there" is the question a
+        // model asks before it knows which topic to open.
+        if (query === "") {
+          const shown = notes.slice(0, 20);
+          const rendered = shown
+            .map((dream) => "- " + (String(dream.title ?? "").trim() || dream.topicKey) + "（" + dream.topicKey + "）")
+            .join("\n");
+          return {
+            outcome: "ok",
+            message: `梦层有 ${notes.length} 篇已采纳的整理记录，下面是目录；给一个主题词就能读正文。`,
+            count: shown.length,
+            rendered,
+            items: shown.map(shape),
+          };
+        }
+        const limit = Math.min(5, Math.max(1, Math.trunc(Number(args?.limit ?? 3)) || 3));
+        const hits = searchDreams(notes, query, limit);
+        if (hits.length === 0) {
+          return {
+            outcome: "not_found",
+            message: `没有与「${query.slice(0, 40)}」匹配的整理记录。换个主题词再试，或者直接用 memory_search 查事实。`,
+            count: 0,
+            rendered: "（无匹配）",
+          };
+        }
+        try {
+          store.dreamRead({ ids: hits.map((dream) => dream.id) });
+        } catch (error) {
+          warn(ctx, "dsh-fact-memory: dream read counter failed: " + oneLine(error));
+        }
+        const rendered = hits
+          .map((dream) => {
+            const title = String(dream.title ?? "").trim() || String(dream.topicKey ?? "");
+            const when = String(dream.validFrom ?? dream.updatedAt ?? "").slice(0, 10);
+            const lines = ["【" + title + "】" + (when === "" ? "" : " 记于 " + when), String(dream.body ?? "").trim()];
+            const sources = Array.isArray(dream.sources) ? dream.sources : [];
+            if (sources.length > 0) {
+              const refs = sources.map((source) =>
+                [source.label, source.sessionId, source.fromSeq != null && source.toSeq != null ? source.fromSeq + "–" + source.toSeq : ""]
+                  .filter((part) => part !== undefined && part !== null && part !== "")
+                  .join(" "),
+              );
+              lines.push("来源：" + refs.join("、"));
+            }
+            return lines.join("\n");
+          })
+          .join("\n\n");
+        return {
+          outcome: "ok",
+          message: `读到 ${hits.length} 篇整理记录。它们是当时的叙述，不是现在成立的事实；要当前值请用 memory_search。`,
+          count: hits.length,
+          rendered,
+          items: hits.map(shape),
+        };
+      },
+    });
+    return dispose;
+  }, "dsh-fact-memory: dream_read");
+
 
   // ── per-turn hook: fresh-user notice + optional rule-based capture ──────
   const processedText = new Map(); // sessionId -> Set(text hash)
@@ -3197,6 +3343,16 @@ function apply(ctx, config) {
       extractWaiters.clear();
       extractRetries.clear();
       extractStarted.clear();
+      // The agent-level listeners belong to this module instance: drop them on
+      // unload so a reloaded copy is the only one answering pre-step.
+      for (const dispose of agentHookDisposers) {
+        try {
+          dispose();
+        } catch {
+          /* already gone */
+        }
+      }
+      agentHookDisposers.clear();
     },
     "dsh-fact-memory: extraction timers",
   );
@@ -3205,8 +3361,10 @@ function apply(ctx, config) {
 
   const installAgentHooks = (agent) => {
     if (!agent || typeof agent.ctx?.on !== "function") return;
+    if (hookedAgents.has(agent)) return;
+    hookedAgents.add(agent);
     const sessionId = String(agent.id ?? "");
-    agent.ctx.on("agent/pre-step", async (payload, next) => {
+    const dispose = agent.ctx.on("agent/pre-step", async (payload, next) => {
       // Remember which model this agent runs: extraction reuses it instead of
       // asking for a second credential.
       if (payload?.modelSelection) {
@@ -3232,12 +3390,20 @@ function apply(ctx, config) {
         const handle = handleFor(cfg);
         if (!handle.store) return decision;
         const text = messageText(fresh);
-        // One notice per turn: the host puts its own turn counter on the pre-step
-        // payload (agent.ts preStep passes { ...position }), so a later step of the
-        // same turn returns here and skips the cue and the capture work as well.
-        const turnKey = Number.isInteger(payload?.turn) ? payload.turn : (fresh.id ?? null);
+        // One notice per user message: the host puts its own turn counter on the
+        // pre-step payload (agent.ts preStep passes { ...position }), so a later
+        // step of the same turn returns here and skips the cue and the capture work
+        // as well. The message id is preferred over the turn because the same turn
+        // can reach two live agents (a model switch re-creates the agent), and both
+        // of them would otherwise inject a copy.
+        const noticeKey =
+          typeof fresh.id === "string" && fresh.id !== ""
+            ? "message:" + fresh.id
+            : Number.isInteger(payload?.turn)
+              ? "turn:" + payload.turn
+              : null;
         const previous = notifiedTurns.get(sessionId);
-        if (turnKey !== null && previous && previous.agent === agent && previous.turn === turnKey) return decision;
+        if (noticeKey !== null && previous && previous.key === noticeKey) return decision;
         // Dream cue: one line, only while the layer is on and the message names a
         // note's topic. Kept outside the reminder budget because it is about this
         // topic, not about the library as a whole.
@@ -3289,9 +3455,17 @@ function apply(ctx, config) {
         const noticeBudget = budgetChars(Number(cfg.reminderBudgetTokens ?? 300));
         if (noticeBudget <= 0) return decision;
         const empty = visibleCount(handle.store, safetyOf(cfg).sensitiveModelVisible) === 0;
-        notifiedTurns.set(sessionId, { agent, turn: turnKey });
+        notifiedTurns.set(sessionId, { key: noticeKey });
         if (notifiedTurns.size > MAX_SESSIONS) notifiedTurns.delete(notifiedTurns.keys().next().value);
-        const body = clampCodepoints(empty ? REMINDER_EMPTY : REMINDER_WITH_FACTS, noticeBudget).text;
+        // The note layer is advertised only when it has something to open: a
+        // pointer to an empty drawer, on every turn, is pure noise.
+        let dreamNotes = 0;
+        try {
+          dreamNotes = handle.store.dreamCount({ status: ["active"] });
+        } catch {
+          dreamNotes = 0;
+        }
+        const body = clampCodepoints(reminderText({ empty, dreams: dreamNotes }), noticeBudget).text;
         return withCue({
           kind: "enter",
           messages: [...decision.messages, noticeMessage(body, empty ? "记忆已就绪（当前为空）" : "记忆已就绪")],
@@ -3301,6 +3475,10 @@ function apply(ctx, config) {
         return decision;
       }
     });
+    // The agent's ctx outlives this plugin, so a listener left behind would fire
+    // for a module instance that is gone — and inject a second copy of a notice
+    // the current instance already wrote.
+    if (typeof dispose === "function") agentHookDisposers.add(dispose);
   };
 
   ctx.effect(() => ctx.on("agent/created", (payload) => installAgentHooks(payload?.agent)), "dsh-fact-memory: agent hooks");
@@ -3358,6 +3536,9 @@ function apply(ctx, config) {
       const handle = handleFor(cfg);
       if (!handle.store) return { ok: false, error: handle.error };
       const limit = Math.max(1, Math.min(50, Number(body?.limit ?? 20) || 20));
+      // The panel turns pages in the browser, so these two lists are handed over
+      // whole: a page count that disagrees with the list is worse than a fat body.
+      const pageAll = 500;
       const status = typeof body?.status === "string" && body.status !== "" ? body.status : null;
       const snapshot = dreamSnapshot(handle, cfg);
       return {
@@ -3366,11 +3547,11 @@ function apply(ctx, config) {
         pending: handle.store.dreamPending({ limit }),
         // Accepted notes have their own list: slicing them out of a mixed page
         // hides them as soon as enough pending rows fill it.
-        active: handle.store.dreams({ status: "active", limit, order: "heat" }),
+        active: handle.store.dreams({ status: "active", limit: pageAll, order: "heat" }),
         // The topic index is built by rule from the live notes: a map of what
         // exists, never a summary of what they mean.
-        index: buildTopicIndex(handle.store.dreams({ status: "active", limit: 200, order: "heat" })),
-        archived: handle.store.dreams({ status: "archived", limit: 20 }),
+        index: buildTopicIndex(handle.store.dreams({ status: "active", limit: pageAll, order: "heat" })),
+        archived: handle.store.dreams({ status: "archived", limit: pageAll }),
         archiveAfterDays: Number(cfg.dreamArchiveAfterDays ?? 90),
         backfillMaxSessions: Number(cfg.dreamBackfillMaxSessions ?? 50),
         backfillMaxChars: Number(cfg.dreamBackfillMaxChars ?? 200000),

@@ -396,6 +396,10 @@ const DDL_V11 = [
      digest TEXT NOT NULL,
      model TEXT NOT NULL DEFAULT '',
      prompt_version TEXT NOT NULL DEFAULT 'v1',
+     -- Reads through the dream_read tool. Kept apart from hit_count: one says the
+     -- topic came up, the other says the model actually opened the note.
+     read_count INTEGER NOT NULL DEFAULT 0,
+     last_read_at TEXT,
      created_at TEXT NOT NULL,
      updated_at TEXT NOT NULL,
      UNIQUE (topic_key, digest)
@@ -446,6 +450,10 @@ const DDL_V11 = [
 // "hot" when a conversation actually mentioned its topic and the cue matched.
 // There is no decay constant here on purpose - a number that looks precise but
 // is made up is worse than last-activity, which is measured.
+//
+// read_count/last_read_at (v15) answer the other question a memory layer has to
+// survive: did anyone ever open the note? A cue proves the topic came up; only a
+// read proves the note was wanted.
 /** True when a table already carries a column (used by the additive migrations). */
 function hasColumn(db, table, column) {
   try {
@@ -810,6 +818,25 @@ const MIGRATIONS = {
       db.exec("DROP TABLE IF EXISTS dreams_fts");
       db.exec("PRAGMA user_version = 13");
       db.prepare("UPDATE store_meta SET schema_version = 13, updated_at = ?").run(nowIso());
+      db.exec("COMMIT");
+    } catch (error) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        /* the original error is the one worth reporting */
+      }
+      throw error;
+    }
+  },
+  // v15: read counters on dreams. Additive and defaulted, so a note written by an
+  // older build simply reads as "never opened".
+  14: (db) => {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      addColumnIfMissing(db, "dreams", "read_count", "INTEGER NOT NULL DEFAULT 0");
+      addColumnIfMissing(db, "dreams", "last_read_at", "TEXT");
+      db.exec("PRAGMA user_version = 15");
+      db.prepare("UPDATE store_meta SET schema_version = 15, updated_at = ?").run(nowIso());
       db.exec("COMMIT");
     } catch (error) {
       try {
