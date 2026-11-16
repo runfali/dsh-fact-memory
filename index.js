@@ -35,6 +35,7 @@ import {
   clampCodepoints,
   defaultDataDir,
   looksLikeTranscript,
+  nowIso,
   oneLine,
   privacyHits,
   secretHits,
@@ -48,11 +49,24 @@ import {
   REMINDER_EMPTY,
   REMINDER_WITH_FACTS,
   buildDirectory,
+  dreamCueHits,
+  dreamCueText,
   looksMemoryRelated,
   messageText,
 } from "./src/inject.js";
 import { commitImport, exportFile, previewImport } from "./src/jsonl.js";
 import { registerJsonRoute } from "./src/routes.js";
+import {
+  DREAM_MIN_USER_MESSAGES,
+  DREAM_SCHEMA,
+  DREAM_SYSTEM,
+  buildTopicIndex,
+  decideDream,
+  dreamStateLine,
+  pruneFeed,
+  runDreamPass,
+} from "./src/dream.js";
+import { backfillSessions } from "./src/backfill.js";
 import { applyProposal, createProposal, getProposal, listProposals, pruneProposal, rejectProposal, reviseProposal } from "./src/proposals.js";
 import { edgeFacts, graphNeighborhood, graphNebula, graphStats } from "./src/graph.js";
 import { calibrate, embeddingFingerprint, indexVectors, rerankFingerprint, saveCalibration } from "./src/semantic.js";
@@ -202,6 +216,49 @@ const Config = z
     extractFallbackChars: z.number().min(0).max(20000).step(100).default(800),
     /** Read the assistant's replies too: the fact often surfaces after the work. */
     extractIncludeAssistant: z.boolean().default(true),
+    /**
+     * The dream layer: a second, documentary memory that reads whole
+     * conversations and writes readable notes. Off by default — it spends model
+     * calls and keeps a verbatim copy of the conversation while it is on, so it
+     * is a choice, not a default. Facts are unaffected either way.
+     */
+    dreamEnabled: z.boolean().default(false),
+    /** Unorganized characters that make an automatic pass worth running. */
+    dreamMinChars: z.number().min(200).max(400000).step(100).default(10000),
+    /** Sessions that make a pass worth running, with the character floor below. */
+    dreamMinSessions: z.number().min(1).max(50).step(1).default(3),
+    /** A single turn this large is material enough to tidy up without waiting. */
+    dreamEventTrigger: z.boolean().default(true),
+    /** New characters in one turn that count as an event. */
+    dreamEventMinChars: z.number().min(500).max(200000).step(500).default(6000),
+    /** Idle fallback: days since the last pass... */
+    dreamIdleFloorDays: z.number().min(1).max(90).step(1).default(7),
+    /** ...and the characters that still make an idle pass worthwhile. */
+    dreamIdleFloorChars: z.number().min(200).max(100000).step(100).default(2000),
+    /** Minimum gap between two automatic passes (ms). */
+    dreamMinGapMs: z.number().min(0).max(604800000).step(60000).default(21600000),
+    /** Automatic passes per local day; damped before any threshold applies. */
+    dreamDailyCap: z.number().min(1).max(12).step(1).default(2),
+    /** Characters one pass may read; the rest stays in the feed. */
+    dreamMaxChars: z.number().min(2000).max(200000).step(500).default(40000),
+    /** Notes one pass may keep. */
+    dreamMaxDreams: z.number().min(1).max(10).step(1).default(5),
+    /** What to pay attention to; also settable per manual run. */
+    dreamFocus: z.string().default(""),
+    /** Days an unconsumed feed row is kept; 0 keeps it forever. */
+    dreamFeedRetentionDays: z.number().min(0).max(3650).step(1).default(30),
+    /** cue: one line pointing at a related note; off: nothing is injected. */
+    dreamInjectMode: z.string().default("cue"),
+    /**
+     * Days without a cue before a live note is archived. Archiving is a status,
+     * not a delete: the row, its sources and its timeline stay, and the tab can
+     * put it back. 0 disables the rule entirely.
+     */
+    dreamArchiveAfterDays: z.number().min(0).max(3650).step(1).default(90),
+    /** Session archives one backfill may read. */
+    dreamBackfillMaxSessions: z.number().min(1).max(500).step(1).default(50),
+    /** Characters one backfill may copy into the feed. */
+    dreamBackfillMaxChars: z.number().min(1000).max(2000000).step(1000).default(200000),
   })
   .volatile();
 
@@ -629,6 +686,24 @@ function apply(ctx, config) {
   let auditLastAt = 0;
   let auditLastError = "";
   let auditLastResult = null;
+  // ── dream layer state ────────────────────────────────────────────────
+  let dreamTimer = null;
+  let dreamDisposed = false;
+  let dreamRunning = false;
+  let dreamLastAt = 0;
+  let dreamLastStatus = "";
+  let dreamLastError = "";
+  let dreamLastResult = null;
+  let dreamRunsToday = 0;
+  let dreamDay = "";
+  let dreamEventPending = false;
+  let dreamErrors = 0;
+  let dreamSeeded = false;
+  /** Set after three failed passes in a row; a manual run clears it. */
+  let dreamPaused = false;
+  // Which message already counted as a hit, per session: pre-step can fire more
+  // than once for the same user turn and heat must not double-count it.
+  const cueTouch = new Map();
   let consolidateRunning = false;
   let consolidateLastAt = 0;
   let consolidateLastError = "";
@@ -712,6 +787,34 @@ function apply(ctx, config) {
         lastError: auditLastError,
         lastResult: auditLastResult,
       },
+      // The dream layer's ledger: the panel shows what the last pass did and why
+      // the next one is or is not due, so silence is never ambiguous.
+      dream: (() => {
+        try {
+          const snapshot = dreamSnapshot(handle, cfg);
+          return {
+            enabled: cfg.dreamEnabled === true,
+            injectMode: String(cfg.dreamInjectMode ?? "cue"),
+            running: dreamRunning,
+            paused: dreamPaused,
+            lastAt: dreamLastAt > 0 ? new Date(dreamLastAt).toISOString() : "",
+            lastStatus: dreamLastStatus,
+            lastError: dreamLastError,
+            lastResult: dreamLastResult,
+            pendingChars: snapshot.state.pendingChars,
+            pendingSessions: snapshot.state.pendingSessions,
+            line: dreamStateLine({
+              pendingChars: snapshot.state.pendingChars,
+              pendingSessions: snapshot.state.pendingSessions,
+              lastRunAt: snapshot.state.lastRunAt,
+              verdict: snapshot.verdict,
+            }),
+            counts: handle.store.dreamStats(),
+          };
+        } catch (error) {
+          return { enabled: cfg.dreamEnabled === true, line: "", error: oneLine(error) };
+        }
+      })(),
       review: (() => {
         const seenAt = handle.store.reviewSeenAt("proposals");
         const rows = handle.store.db
@@ -1661,13 +1764,13 @@ function apply(ctx, config) {
 
   const callExtractModel = async (
     provider,
-    { prompt, signal, timeoutMs = 60_000, thinking = false, system = EXTRACT_SYSTEM, schema = EXTRACT_SCHEMA },
+    { prompt, signal, timeoutMs = 60_000, thinking = false, system = EXTRACT_SYSTEM, schema = EXTRACT_SCHEMA, maxTokens = 2048 },
   ) => {
     if (provider.kind === "custom") {
-      return callCustomText(provider, { system, prompt, signal, timeoutMs, thinking, schema });
+      return callCustomText(provider, { system, prompt, signal, timeoutMs, thinking, schema, maxTokens });
     }
     const llm = typeof ctx.get === "function" ? ctx.get("llm") : undefined;
-    return streamHostText(llm, { ...provider, system, prompt, signal, timeoutMs, thinking });
+    return streamHostText(llm, { ...provider, system, prompt, signal, timeoutMs, thinking, maxTokens });
   };
 
   // The prompt numbers chunks, not messages, so a chunk-level reference can
@@ -1812,6 +1915,9 @@ function apply(ctx, config) {
         messageId: message.id ?? null,
         role,
         text: `${role === "assistant" ? "助手" : "用户"}：${text}`,
+        // The feed keeps the message itself, not the extractor's rendering, so a
+        // dream can quote the person without the role prefix leaking into a quote.
+        raw: text,
       });
     }
     return { items, end };
@@ -2701,6 +2807,313 @@ function apply(ctx, config) {
     "dsh-fact-memory: duplicate review timer",
   );
 
+  // ── dream layer: feed, pass, scheduler ────────────────────────────────
+  /**
+   * The dream layer is a second, documentary memory: it reads whole
+   * conversations and writes readable notes. It never writes a fact, and a note
+   * reaches the library only when a person accepts it.
+   *
+   * The feed below is its only input, and it is written only while the layer is
+   * on: a second verbatim copy of every conversation is a privacy cost that must
+   * be switched on, never a default.
+   */
+  const appendFeed = (session, turnEndSeq) => {
+    const cfg = live();
+    if (cfg.enabled === false || cfg.dreamEnabled !== true) return 0;
+    const handle = handleFor(cfg);
+    if (!handle.store) return 0;
+    const sessionId = String(session?.id ?? "");
+    if (sessionId === "") return 0;
+    // The high-water mark lives in the store, not in the feed: a consumed row is
+    // deleted, so a restart cannot recover it from the feed itself.
+    const mark = handle.store.dreamFeedStateGet(sessionId);
+    // First sight of a session: start from here. Reaching back to seq 0 would copy
+    // a conversation that happened before the switch was turned on, which is not
+    // what "starts collecting from now" promised.
+    if (mark < 0) {
+      if (Number.isFinite(turnEndSeq)) handle.store.dreamFeedStateSet({ sessionId, lastSeq: turnEndSeq });
+      return 0;
+    }
+    // Same convention as the extractor: the stored mark is the half-open end of the
+    // last collected range, so it is also where the next one starts.
+    const from = Math.max(0, mark);
+    const { items, end } = newPassMessages(session, from, turnEndSeq, { includeAssistant: true });
+    let chars = 0;
+    for (const item of items) {
+      const raw = String(item.raw ?? "");
+      if (raw.trim() === "") continue;
+      const written = handle.store.dreamFeedAppend({
+        sessionId,
+        seq: item.seq,
+        at: nowIso(),
+        role: item.role,
+        text: raw,
+      });
+      if (written.inserted) chars += raw.length;
+    }
+    if (Number.isFinite(end)) handle.store.dreamFeedStateSet({ sessionId, lastSeq: end });
+    // Event trigger: one turn that brought a lot of new words is material enough
+    // to tidy up early (T3); the damping inside decideDream still applies.
+    const perTurn = Number(cfg.dreamEventMinChars ?? 6000);
+    if (perTurn > 0 && chars >= perTurn) dreamEventPending = true;
+    return chars;
+  };
+
+  /** The local calendar day, so "two per day" means the user day, not UTC day. */
+  const localDay = () => {
+    const now = new Date();
+    return now.getFullYear() + "-" + (now.getMonth() + 1) + "-" + now.getDate();
+  };
+
+  /** Feed counters plus the current verdict; the panel and the timer agree here. */
+  const dreamSnapshot = (handle, cfg) => {
+    if (dreamDay !== localDay()) {
+      dreamDay = localDay();
+      dreamRunsToday = 0;
+    }
+    // Damping is kept in memory for speed, but the ledger is the truth: a restart
+    // must not hand the user a fresh "two passes a day" allowance.
+    if (!dreamSeeded) {
+      dreamSeeded = true;
+      try {
+        const runs = handle.store.recentDreamRuns({ limit: 20 });
+        const last = runs[0] ?? null;
+        const at = last ? Date.parse(String(last.created_at ?? "")) : Number.NaN;
+        if (Number.isFinite(at)) {
+          dreamLastAt = at;
+          dreamLastStatus = String(last.status ?? "");
+        }
+        const midnight = new Date();
+        midnight.setHours(0, 0, 0, 0);
+        dreamRunsToday = runs.filter(
+          (row) => String(row.trigger ?? "") !== "manual" && Date.parse(String(row.created_at ?? "")) >= midnight.getTime(),
+        ).length;
+      } catch {
+        /* a missing ledger must not take the panel down with it */
+      }
+    }
+    let stats = { chars: 0, messages: 0, sessions: 0 };
+    let eligibleSessions = 0;
+    try {
+      stats = handle.store.dreamFeedStats({ afterId: 0 });
+      // The session threshold counts sessions the collector would actually take: a
+      // conversation with one or two user messages is still a draft, and letting it
+      // trip T2 only produces a pass with nothing to read.
+      eligibleSessions = handle.store
+        .dreamFeedSessions({ afterId: 0, limit: 200 })
+        .filter((row) => Number(row.userMessages ?? 0) >= DREAM_MIN_USER_MESSAGES).length;
+    } catch {
+      /* an unreadable counter must not take the panel down with it */
+    }
+    const state = {
+      pendingChars: Number(stats.chars ?? 0),
+      // Two different questions: how many sessions have material waiting, and how
+      // many of them the collector would actually take for the session threshold.
+      pendingSessions: Number(stats.sessions ?? 0),
+      eligibleSessions,
+      lastRunAt: dreamLastAt > 0 ? dreamLastAt : null,
+      lastRunStatus: dreamLastStatus,
+      runsToday: dreamRunsToday,
+      eventPending: dreamEventPending,
+    };
+    return { stats, state, verdict: decideDream(state, cfg, Date.now()) };
+  };
+
+  const dreamNow = async ({ force = false, trigger = "manual", focus = "", dryRun = false, sessionIds = null } = {}) => {
+    if (dreamDisposed) return { status: "skipped", reason: "disposed" };
+    if (dreamRunning) return { status: "busy" };
+    const cfg = live();
+    if (cfg.enabled === false) return { status: "skipped", reason: "disabled" };
+    // The layer switch is a switch: with no feed being collected a manual run has
+    // nothing to read, and running anyway would spend a model call to say so.
+    if (cfg.dreamEnabled !== true) return { status: "skipped", reason: "disabled" };
+    // Three failures in a row is a broken endpoint, not a bad batch: stop paying
+    // for automatic retries. A manual run still goes through, because the person
+    // pressing the button is the one who fixed (or wants to see) the problem.
+    if (!force && dreamPaused) return { status: "skipped", reason: "paused" };
+    const handle = handleFor(cfg);
+    if (!handle.store) return { status: "skipped", reason: "no_store", error: handle.error };
+    const before = dreamSnapshot(handle, cfg);
+    if (!force && !before.verdict.run) return { status: "skipped", reason: before.verdict.reason };
+    // A pass over a handful of characters costs a model call and teaches nothing.
+    // The floor applies to the manual path too, and it is checked before the model
+    // is resolved: "there is nothing to dream about" must not be reported as "no
+    // model is configured" just because nothing is configured yet.
+    if (before.state.pendingChars < 200) return { status: "skipped", reason: "not_enough" };
+    dreamRunning = true;
+    try {
+      const provider = await extractionProvider(modelSessionId, cfg);
+      if (!provider) {
+        dreamLastError = "没有可用的模型";
+        return { status: "skipped", reason: "no_model", error: dreamLastError };
+      }
+      // Provenance on the note is the model that actually wrote it, not a label a
+      // person typed into the settings card.
+      const model = String(provider.provider ?? provider.kind ?? "") + "/" + String(provider.model ?? "");
+      const effectiveFocus = String(focus ?? "").trim() || String(cfg.dreamFocus ?? "");
+      const result = await runDreamPass({
+        store: handle.store,
+        cfg,
+        focus: effectiveFocus,
+        sessionIds,
+        dryRun,
+        model,
+        callModel: (prompt) =>
+          callExtractModel(provider, {
+            prompt,
+            system: DREAM_SYSTEM,
+            schema: DREAM_SCHEMA,
+            timeoutMs: 180_000,
+            thinking: false,
+            // One note may be 8 lines of 120 characters and an answer may hold five
+            // of them: a fact-sized 2k budget would cut the JSON in half.
+            maxTokens: 6144,
+          }),
+      });
+      const failed = result.status === "error";
+      // A dry run exists to look without touching: it must not move the damping
+      // clock, count against the daily cap, or push the failure streak toward a
+      // pause. Only an observable side effect would make it a real pass.
+      if (!dryRun) {
+        dreamLastAt = Date.now();
+        dreamLastStatus = failed ? "error" : String(result.status ?? "skipped");
+        dreamLastResult = {
+          status: String(result.status ?? ""),
+          reason: String(result.reason ?? ""),
+          proposed: Number(result.proposed ?? 0),
+          accepted: Number(result.accepted ?? 0),
+          dropped: Number(result.dropped ?? 0),
+          chars: Number(result.material?.chars ?? 0),
+          sessions: (result.material?.sessions ?? []).length,
+          durationMs: Number(result.durationMs ?? 0),
+          at: new Date(dreamLastAt).toISOString(),
+        };
+        dreamLastError = failed ? String(result.error ?? result.reason ?? "") : "";
+        if (failed) {
+          dreamErrors += 1;
+          if (dreamErrors >= 3) {
+            dreamPaused = true;
+            warn(ctx, "dsh-fact-memory: dream pass failed three times in a row; automatic runs paused");
+          }
+        } else {
+          dreamErrors = 0;
+          if (force) dreamPaused = false;
+          // The material is consumed whether or not a note survived (all_dropped
+          // still consumes), so the event flag has done its job either way.
+          dreamEventPending = false;
+          // The cap is a budget on automatic passes; the button is the user's own
+          // decision and must not eat it, as the setting card promises.
+          if (String(trigger ?? "") !== "manual") dreamRunsToday += 1;
+        }
+        try {
+          handle.store.recordDreamRun({
+            status: dreamLastStatus,
+            reason: String(result.reason ?? ""),
+            trigger: String(trigger ?? ""),
+            focus: effectiveFocus,
+            sessionIds: (result.material?.sessions ?? []).map((entry) => String(entry.sessionId ?? "")),
+            chars: Number(result.material?.chars ?? 0),
+            messages: Number(result.material?.messages ?? 0),
+            proposed: Number(result.proposed ?? 0),
+            accepted: Number(result.accepted ?? 0),
+            dropped: Number(result.dropped ?? 0),
+            cursorId: Number(result.cursorId ?? 0),
+            model,
+            durationMs: Number(result.durationMs ?? 0),
+            error: dreamLastError,
+            at: new Date(dreamLastAt).toISOString(),
+          });
+        } catch (error) {
+          warn(ctx, "dsh-fact-memory: dream ledger write failed: " + oneLine(error));
+        }
+        const keep = Number(cfg.dreamFeedRetentionDays ?? 30);
+        if (keep > 0) {
+          try {
+            pruneFeed(handle.store, { days: keep });
+          } catch {
+            /* retention is housekeeping, never a reason to fail a pass */
+          }
+        }
+      }
+      return { ...result, state: dreamSnapshot(handle, live()).state };
+    } catch (error) {
+      // Same rule as the normal path: a preview that blew up is not a pass, and
+      // must not push the failure streak toward an automatic pause.
+      if (!dryRun) {
+        dreamLastAt = Date.now();
+        dreamLastStatus = "error";
+        dreamLastError = oneLine(error);
+        dreamErrors += 1;
+      }
+      warn(ctx, "dsh-fact-memory: dream pass failed: " + oneLine(error));
+      // Report this failure, not whatever the last real pass recorded.
+      return { status: "error", reason: "exception", error: oneLine(error) };
+    } finally {
+      dreamRunning = false;
+    }
+  };
+
+  const tickDream = () => {
+    dreamTimer = null;
+    if (dreamDisposed) return;
+    try {
+      const cfg = live();
+      if (cfg.enabled !== false) {
+        const handle = handleFor(cfg);
+        // Retention is housekeeping, not a pass: turning the layer off must not
+        // leave a verbatim copy of the conversation on disk forever.
+        const keep = Number(cfg.dreamFeedRetentionDays ?? 30);
+        if (handle.store && keep > 0) {
+          try {
+            pruneFeed(handle.store, { days: keep });
+          } catch {
+            /* retention never breaks a tick */
+          }
+        }
+        if (handle.store && cfg.dreamEnabled === true) {
+          // A note nothing has touched in months is not wrong, it is unused:
+          // archiving keeps it out of the cue and the index without deleting a
+          // row, and the tab can put it back.
+          const archiveDays = Number(cfg.dreamArchiveAfterDays ?? 90);
+          if (archiveDays > 0) {
+            try {
+              const before = new Date(Date.now() - archiveDays * 86400_000).toISOString();
+              const result = handle.store.dreamArchiveStale({ before });
+              if (Number(result.archived) > 0) {
+                warn(ctx, `dsh-fact-memory: archived ${result.archived} dream(s) untouched for ${archiveDays} days`);
+              }
+            } catch (error) {
+              warn(ctx, "dsh-fact-memory: dream archive failed: " + oneLine(error));
+            }
+          }
+          const snapshot = dreamSnapshot(handle, cfg);
+          if (snapshot.verdict.run) {
+            dreamNow({ force: false, trigger: snapshot.verdict.reason }).catch((error) => {
+              dreamLastError = oneLine(error);
+            });
+          }
+        }
+      }
+    } catch (error) {
+      dreamLastError = oneLine(error);
+      warn(ctx, "dsh-fact-memory: dream tick failed: " + dreamLastError);
+    }
+    dreamTimer = setTimeout(tickDream, 60_000);
+    dreamTimer.unref?.();
+  };
+  // Startup delay: the first minutes after a restart belong to the reminder and
+  // the extraction queue, not to a model call nobody asked for.
+  dreamTimer = setTimeout(tickDream, 90_000);
+  dreamTimer.unref?.();
+  ctx.effect(
+    () => () => {
+      dreamDisposed = true;
+      if (dreamTimer) clearTimeout(dreamTimer);
+      dreamTimer = null;
+    },
+    "dsh-fact-memory: dream timer",
+  );
+
   // `turn/end` is the turn boundary itself: it fires for a text answer, a
   // tool-only answer, and an aborted turn alike, so nothing after a turn is
   // missed (a final `assistant/message` is not guaranteed).
@@ -2711,12 +3124,17 @@ function apply(ctx, config) {
           if (!event || event.type !== "turn/end") return;
           if (live().enabled === false) return;
           const turnEndSeq = typeof event.seq === "number" ? event.seq : null;
+          // Collect first: a manual capture below returns early, and the dream
+          // layer must still see the turn that was captured.
+          appendFeed(session, turnEndSeq);
           // The assistant stored this turn itself: consume it instead of asking the
           // model to describe the same text again.
           if (consumeManualCapture(session, turnEndSeq)) return;
           scheduleExtraction(session, turnEndSeq);
         } catch (error) {
-          warn(ctx, `dsh-fact-memory: extraction trigger failed: ${oneLine(error)}`);
+          // This handler feeds both layers, so a failure here is not necessarily an
+        // extraction failure; naming it after one hides which half broke.
+        warn(ctx, `dsh-fact-memory: turn/end handling failed: ${oneLine(error)}`);
         }
       }),
     "dsh-fact-memory: extraction trigger",
@@ -2791,6 +3209,28 @@ function apply(ctx, config) {
         const handle = handleFor(cfg);
         if (!handle.store) return decision;
         const text = messageText(fresh);
+        // Dream cue: one line, only while the layer is on and the message names a
+        // note's topic. Kept outside the reminder budget because it is about this
+        // topic, not about the library as a whole.
+        const cueDreams =
+          cfg.dreamEnabled === true && String(cfg.dreamInjectMode ?? "cue") === "cue"
+            ? handle.store.dreams({ status: ["active"], limit: 12, order: "heat" })
+            : [];
+        const cueHits = cueDreams.length > 0 ? dreamCueHits(cueDreams, text) : [];
+        const cue = dreamCueText(cueHits);
+        // Heat is only worth recording when a real message matched, and only once
+        // per message: the same text reaches pre-step again on a later step.
+        if (cueHits.length > 0 && cueTouch.get(sessionId) !== text) {
+          cueTouch.set(sessionId, text);
+          if (cueTouch.size > MAX_SESSIONS) cueTouch.delete(cueTouch.keys().next().value);
+          try {
+            handle.store.dreamTouch({ ids: cueHits.map((dream) => dream.id) });
+          } catch (error) {
+            warn(ctx, "dsh-fact-memory: dream heat update failed: " + oneLine(error));
+          }
+        }
+        const withCue = (value) =>
+          cue === "" ? value : { ...value, messages: [...value.messages, noticeMessage(cue, "梦见相关记录")] };
         if (cfg.autoCapture === true && text !== "") {
           // Decide the single-writer handoff from a provider that actually
           // exists. A switch with no model behind it must not silence the rules.
@@ -2813,9 +3253,9 @@ function apply(ctx, config) {
             modelReady,
           });
         }
-        if (cfg.injectReminder === false) return decision;
+        if (cfg.injectReminder === false) return withCue(decision);
         const first = !seenSessions.has(sessionId);
-        if (!first && !looksMemoryRelated(text)) return decision;
+        if (!first && !looksMemoryRelated(text)) return withCue(decision);
         // The budget is a real switch, not a label: 0 silences the notice and a
         // positive value caps it. Before this the setting was documented in both
         // READMEs and read nowhere, so a user who set 0 still got the full text.
@@ -2825,10 +3265,10 @@ function apply(ctx, config) {
         seenSessions.add(sessionId);
         if (seenSessions.size > MAX_SESSIONS) seenSessions.delete(seenSessions.values().next().value);
         const body = clampCodepoints(empty ? REMINDER_EMPTY : REMINDER_WITH_FACTS, noticeBudget).text;
-        return {
+        return withCue({
           kind: "enter",
           messages: [...decision.messages, noticeMessage(body, empty ? "记忆已就绪（当前为空）" : "记忆已就绪")],
-        };
+        });
       } catch (error) {
         warn(ctx, `dsh-fact-memory: injection failed: ${oneLine(error)}`);
         return decision;
@@ -2853,6 +3293,196 @@ function apply(ctx, config) {
   registerJsonRoute(ctx, {
     path: "/api/fact-memory/status",
     build: () => statusPayload(),
+  });
+
+  // ── dream layer routes ─────────────────────────────────────────────────
+  registerJsonRoute(ctx, {
+    path: "/api/fact-memory/dream",
+    build: async (body) => {
+      const result = await dreamNow({
+        force: true,
+        trigger: "manual",
+        focus: String(body?.focus ?? ""),
+        dryRun: body?.dryRun === true,
+        sessionIds: Array.isArray(body?.sessionIds) ? body.sessionIds.map((id) => String(id)) : null,
+      });
+      // The material block can be tens of thousands of characters; the caller
+      // gets the verdict and the counts, never the conversation.
+      return {
+        ok: result.status !== "error",
+        status: String(result.status ?? ""),
+        reason: String(result.reason ?? ""),
+        proposed: Number(result.proposed ?? 0),
+        accepted: Number(result.accepted ?? 0),
+        dropped: Number(result.dropped ?? 0),
+        created: Array.isArray(result.created) ? result.created : [],
+        cursorId: Number(result.cursorId ?? 0),
+        durationMs: Number(result.durationMs ?? 0),
+        error: String(result.error ?? ""),
+        state: result.state ?? null,
+      };
+    },
+  });
+
+  registerJsonRoute(ctx, {
+    path: "/api/fact-memory/dreams",
+    build: (body) => {
+      const cfg = live();
+      const handle = handleFor(cfg);
+      if (!handle.store) return { ok: false, error: handle.error };
+      const limit = Math.max(1, Math.min(50, Number(body?.limit ?? 20) || 20));
+      const status = typeof body?.status === "string" && body.status !== "" ? body.status : null;
+      const snapshot = dreamSnapshot(handle, cfg);
+      return {
+        ok: true,
+        items: handle.store.dreams({ status, limit, offset: Math.max(0, Number(body?.offset ?? 0) || 0) }),
+        pending: handle.store.dreamPending({ limit }),
+        // Accepted notes have their own list: slicing them out of a mixed page
+        // hides them as soon as enough pending rows fill it.
+        active: handle.store.dreams({ status: "active", limit, order: "heat" }),
+        // The topic index is built by rule from the live notes: a map of what
+        // exists, never a summary of what they mean.
+        index: buildTopicIndex(handle.store.dreams({ status: "active", limit: 200, order: "heat" })),
+        archived: handle.store.dreams({ status: "archived", limit: 20 }),
+        archiveAfterDays: Number(cfg.dreamArchiveAfterDays ?? 90),
+        backfillMaxSessions: Number(cfg.dreamBackfillMaxSessions ?? 50),
+        backfillMaxChars: Number(cfg.dreamBackfillMaxChars ?? 200000),
+        rejects: handle.store.dreamRejects({ limit: 10 }),
+        counts: handle.store.dreamStats(),
+        runs: handle.store.recentDreamRuns({ limit: 8 }),
+        enabled: cfg.dreamEnabled === true,
+        paused: dreamPaused,
+        running: dreamRunning,
+        lastError: dreamLastError,
+        lastResult: dreamLastResult,
+        line: dreamStateLine({
+          pendingChars: snapshot.state.pendingChars,
+          pendingSessions: snapshot.state.pendingSessions,
+          lastRunAt: snapshot.state.lastRunAt,
+          verdict: snapshot.verdict,
+        }),
+      };
+    },
+  });
+
+  registerJsonRoute(ctx, {
+    path: "/api/fact-memory/dream-apply",
+    build: (body) => {
+      const handle = handleFor(live());
+      if (!handle.store) return { ok: false, error: handle.error };
+      const ids = Array.isArray(body?.ids) ? body.ids.map((id) => String(id)) : [];
+      if (ids.length === 0) return { ok: false, error: "缺少要采纳的 dream id" };
+      if (ids.length > 1 && (typeof body?.title === "string" || typeof body?.body === "string")) {
+        return { ok: false, error: "编辑只支持一次一条" };
+      }
+      const applied = [];
+      const failed = [];
+      for (const id of ids) {
+        const result = handle.store.dreamApply({
+          id,
+          title: typeof body?.title === "string" ? body.title : null,
+          body: typeof body?.body === "string" ? body.body : null,
+        });
+        if (result.status === "ok" || result.status === "already_active") applied.push(id);
+        else failed.push({ id, reason: String(result.status ?? "") });
+      }
+      return { ok: true, applied, failed, counts: handle.store.dreamStats() };
+    },
+  });
+
+  registerJsonRoute(ctx, {
+    path: "/api/fact-memory/dream-reject",
+    build: (body) => {
+      const handle = handleFor(live());
+      if (!handle.store) return { ok: false, error: handle.error };
+      const ids = Array.isArray(body?.ids) ? body.ids.map((id) => String(id)) : [];
+      if (ids.length === 0) return { ok: false, error: "缺少要拒绝的 dream id" };
+      const reason = String(body?.reason ?? "").slice(0, 400);
+      const rejected = [];
+      const failed = [];
+      for (const id of ids) {
+        const result = handle.store.dreamReject({ id, reason });
+        if (result.status === "ok" || result.status === "already_rejected") rejected.push(id);
+        else failed.push({ id, reason: String(result.status ?? "") });
+      }
+      return { ok: true, rejected, failed, counts: handle.store.dreamStats() };
+    },
+  });
+
+  // Editing and accepting are one action on purpose: a pending note a person
+  // rewrote is a note they want kept. The card prefills title and prose, and this
+  // route writes the edit and moves the row to active in one transaction.
+  registerJsonRoute(ctx, {
+    path: "/api/fact-memory/dream-edit",
+    build: (body) => {
+      const handle = handleFor(live());
+      if (!handle.store) return { ok: false, error: handle.error };
+      const id = String(body?.id ?? "");
+      if (id === "") return { ok: false, error: "缺少 dream id" };
+      if (!handle.store.dream(id)) return { ok: false, error: "没有这条记录" };
+      const title = typeof body?.title === "string" ? body.title.trim() : "";
+      const prose = typeof body?.body === "string" ? body.body.trim() : "";
+      if (title === "" && prose === "") return { ok: false, error: "标题和正文至少改一项" };
+      const result = handle.store.dreamApply({ id, title: title === "" ? null : title, body: prose === "" ? null : prose });
+      if (result.status === "ok") return { ok: true, dream: result.dream, counts: handle.store.dreamStats() };
+      if (result.status === "already_active") return { ok: true, dream: result.dream, counts: handle.store.dreamStats() };
+      return { ok: false, error: String(result.status ?? "") };
+    },
+  });
+
+  // Archiving is reversible: the row never left the database, so a restore is
+  // one status change and a fresh updated_at.
+  registerJsonRoute(ctx, {
+    path: "/api/fact-memory/dream-restore",
+    build: (body) => {
+      const handle = handleFor(live());
+      if (!handle.store) return { ok: false, error: handle.error };
+      const id = String(body?.id ?? "");
+      if (id === "") return { ok: false, error: "缺少 dream id" };
+      const result = handle.store.dreamRestore({ id });
+      if (result.status === "ok") return { ok: true, dream: result.dream, counts: handle.store.dreamStats() };
+      return { ok: false, error: String(result.status ?? "") };
+    },
+  });
+
+  // Historical backfill. This is the only path that reads conversations the layer
+  // never collected, so it stays manual: the body must say `backfill: true`, the
+  // layer must be on, and both the session count and the character budget are
+  // capped by config. A dry run reads the archives and writes nothing.
+  registerJsonRoute(ctx, {
+    path: "/api/fact-memory/dream-backfill",
+    build: (body) => {
+      const cfg = live();
+      if (body?.backfill !== true) return { ok: false, error: "需要显式确认（backfill: true）" };
+      if (cfg.enabled === false) return { ok: false, error: "插件已停用" };
+      if (cfg.dreamEnabled !== true) return { ok: false, error: "梦层没有开启" };
+      const handle = handleFor(cfg);
+      if (!handle.store) return { ok: false, error: handle.error };
+      const root = join(dirname(handle.dir), "sessions");
+      const dryRun = body?.dryRun === true;
+      const maxSessions = Math.max(1, Math.min(500, Number(body?.maxSessions ?? cfg.dreamBackfillMaxSessions) || 50));
+      const maxChars = Math.max(1000, Math.min(2000000, Number(body?.maxChars ?? cfg.dreamBackfillMaxChars) || 200000));
+      // A dry run swaps in a store that counts but never writes, so the same
+      // reader and the same filters decide both answers.
+      const sink = dryRun
+        ? { dreamFeedAppend: () => ({ inserted: true, id: 0 }), dreamFeedStateSet: () => {} }
+        : handle.store;
+      const summary = backfillSessions({
+        store: sink,
+        root,
+        maxSessions,
+        maxChars,
+      });
+      const snapshot = dreamSnapshot(handle, cfg);
+      return {
+        ok: true,
+        dryRun,
+        root,
+        ...summary,
+        pendingChars: snapshot.state.pendingChars,
+        pendingSessions: snapshot.state.pendingSessions,
+      };
+    },
   });
 
   // An absolute path is not a permission: exports may only be written inside

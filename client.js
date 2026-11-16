@@ -167,6 +167,41 @@ window.__ModuleLoader__.load({
       "hint.consolidateCosineFloor": "向量余弦达到这个值才把这一对送去模型核验。调低能抓到更多换说法的重复，代价是更多模型调用；调高更保守。",
       "field.consolidateMaxPairs": "每轮最多判定几对",
       "hint.consolidateMaxPairs": "自动那一轮最多花几次模型调用；点按钮手动跑时按三倍预算。同一对事实在每个向量代际只判一次，所以没有新内容时几乎不花钱。",
+      "group.dream": "梦层（长文整理）",
+      "field.dreamEnabled": "开启梦层",
+      "hint.dreamEnabled": "梦层是第二套记忆：它读整段对话、写出可读的记录，和事实库分开存放，永不写事实。关着的时候不采集任何对话，所以开启后才从当前会话开始积累。",
+      "field.dreamArchiveAfterDays": "归档天数",
+      "hint.dreamArchiveAfterDays": "多少天没有在对话里命中就归档。归档只是改状态：记录、来源、时间线都还在，页签可以一键恢复；0 = 永不归档。",
+      "field.dreamBackfillMaxSessions": "回填会话上限",
+      "hint.dreamBackfillMaxSessions": "一次历史回填最多读多少个旧会话（新的优先）。已经采集过的会话会跳过，重复执行不会重复入库。",
+      "field.dreamBackfillMaxChars": "回填字符上限",
+      "hint.dreamBackfillMaxChars": "一次历史回填最多往待整理队列里拷多少字符，防止把几个月的历史一次塞进来。",
+      "field.dreamInjectMode": "提示方式",
+      "hint.dreamInjectMode": "cue = 当前话题命中已采纳的记录时，注入一行「有这篇记录」，不含正文、不冒充事实；off = 完全静默。检索仍只查事实，梦不会被当成事实带进上下文。",
+      "field.dreamFocus": "整理时的关注点",
+      "hint.dreamFocus": "写一句「希望它留意什么」，会进提示词；例如「只关心排障过程和结论」。留空则按默认目标整理。",
+      "field.dreamMinChars": "触发阈值：未整理字数",
+      "hint.dreamMinChars": "待整理素材累计到这个字数才自动跑一次。太小会频繁花模型调用，太大则记录总是滞后。",
+      "field.dreamMinSessions": "触发阈值：未整理会话数",
+      "hint.dreamMinSessions": "配合字数下限（2000 字）使用：跨过这么多个会话，且总量够，才跑。只按会话数计会把一次长对话误判成一堆素材。",
+      "field.dreamEventTrigger": "单轮大素材立即触发",
+      "hint.dreamEventTrigger": "某一轮新增字数超过下面的门槛时，不等累计阈值就跑；仍然受最小间隔和每日上限约束。",
+      "field.dreamEventMinChars": "单轮触发字数",
+      "hint.dreamEventMinChars": "一轮新增（用户+助手）达到这个字数算一次事件。",
+      "field.dreamIdleFloorDays": "保底触发：空闲天数",
+      "hint.dreamIdleFloorDays": "离上次整理超过这么多天、且素材够保底字数，就跑一次，避免「一直差一点点」永远不触发。",
+      "field.dreamIdleFloorChars": "保底触发：字数",
+      "hint.dreamIdleFloorChars": "保底触发需要的最低素材字数。",
+      "field.dreamMinGapMs": "最小间隔（毫秒）",
+      "hint.dreamMinGapMs": "两次自动整理之间至少隔这么久；手动「现在整理」不受限。",
+      "field.dreamDailyCap": "每日自动上限",
+      "hint.dreamDailyCap": "按本机日历日计，不含手动触发。",
+      "field.dreamMaxChars": "单次读取上限（字符）",
+      "hint.dreamMaxChars": "一次最多读多少素材；超出部分留在待整理区，顺延到下一次，不会被丢掉。",
+      "field.dreamMaxDreams": "单次最多几条记录",
+      "hint.dreamMaxDreams": "模型一次最多产出这么多条；多出来的会被丢弃并计数。",
+      "field.dreamFeedRetentionDays": "待整理素材保留天数",
+      "hint.dreamFeedRetentionDays": "超过天数的未整理素材会被清理（0 = 永久保留）。清理不会改动已采纳的记录。",
       "field.autoAudit": "自动体检",
       "hint.autoAudit": "后台定期检查事实库：只复述自己属性的事实、只有日期不同的流水账、同一主体被拼成两个实体。每类只出一条聚合提案，明细列在里面可逐条剔除；不采纳不会改库。",
       "field.auditIntervalMs": "体检间隔（毫秒）",
@@ -406,6 +441,41 @@ window.__ModuleLoader__.load({
       "hint.consolidateCosineFloor": "Vector cosine at or above which a pair is worth asking the model about. Lower catches more re-phrasings at the cost of more calls; higher is more conservative.",
       "field.consolidateMaxPairs": "Pairs per sweep",
       "hint.consolidateMaxPairs": "Model calls one automatic sweep may spend; the settings button runs with triple that budget. Each pair is judged once per vector generation, so an unchanged library costs nothing.",
+      "group.dream": "Dream layer (long-form notes)",
+      "field.dreamEnabled": "Enable the dream layer",
+      "hint.dreamEnabled": "A second memory: it reads whole conversations and writes readable notes, stored apart from the fact library and never writing a fact. While it is off nothing is collected, so collection starts with the current session when you switch it on.",
+      "field.dreamArchiveAfterDays": "Archive after (days)",
+      "hint.dreamArchiveAfterDays": "Days without a cue before a live note is archived. Archiving is only a status: the row, its sources and its timeline stay, and the tab restores it with one click. 0 = never.",
+      "field.dreamBackfillMaxSessions": "Backfill session cap",
+      "hint.dreamBackfillMaxSessions": "How many old sessions one backfill may read (newest first). Sessions the layer already collected are skipped, so running it twice copies nothing twice.",
+      "field.dreamBackfillMaxChars": "Backfill character cap",
+      "hint.dreamBackfillMaxChars": "How many characters one backfill may copy into the queue, so months of history cannot arrive in a single batch.",
+      "field.dreamInjectMode": "How to hint",
+      "hint.dreamInjectMode": "cue = when the current topic matches an accepted note, inject one line saying the note exists (no prose, never presented as a fact); off = silent. Search still covers facts only.",
+      "field.dreamFocus": "What to pay attention to",
+      "hint.dreamFocus": "One sentence that goes into the prompt, e.g. only the troubleshooting path and its conclusion. Leave empty to use the default goal.",
+      "field.dreamMinChars": "Trigger: unorganized characters",
+      "hint.dreamMinChars": "An automatic pass runs once this many characters are waiting. Too small spends model calls often; too large keeps notes permanently behind.",
+      "field.dreamMinSessions": "Trigger: unorganized sessions",
+      "hint.dreamMinSessions": "Works together with a 2000-character floor: this many sessions and enough text. Session count alone would mistake one long talk for a pile of material.",
+      "field.dreamEventTrigger": "A large single turn triggers a pass",
+      "hint.dreamEventTrigger": "When one turn adds more than the threshold below, run without waiting for the accumulation thresholds. The minimum gap and daily cap still apply.",
+      "field.dreamEventMinChars": "Single-turn trigger size",
+      "hint.dreamEventMinChars": "New characters (user plus assistant) in one turn that count as an event.",
+      "field.dreamIdleFloorDays": "Fallback: idle days",
+      "hint.dreamIdleFloorDays": "After this many days with enough material, run anyway, so a store that never quite reaches the threshold is not stuck forever.",
+      "field.dreamIdleFloorChars": "Fallback: characters",
+      "hint.dreamIdleFloorChars": "Minimum material for the idle fallback.",
+      "field.dreamMinGapMs": "Minimum gap (ms)",
+      "hint.dreamMinGapMs": "At least this long between automatic passes; the manual button ignores it.",
+      "field.dreamDailyCap": "Automatic passes per day",
+      "hint.dreamDailyCap": "Counted by the local calendar day; manual runs do not count.",
+      "field.dreamMaxChars": "Characters per pass",
+      "hint.dreamMaxChars": "How much material one pass may read; the rest stays waiting for the next pass and is never dropped.",
+      "field.dreamMaxDreams": "Notes per pass",
+      "hint.dreamMaxDreams": "The most notes one answer may keep; extras are dropped and counted.",
+      "field.dreamFeedRetentionDays": "Keep waiting material (days)",
+      "hint.dreamFeedRetentionDays": "Unorganized material older than this is pruned (0 = keep forever). Accepted notes are never touched.",
       "field.autoAudit": "Automatic health check",
       "hint.autoAudit": "Check the library in the background for facts that only restate their own property, pipelines that differ only by date, and one subject spelled as two entities. Each class becomes one aggregated proposal whose details you can strike out; nothing changes unless you accept.",
       "field.auditIntervalMs": "Health check interval (ms)",
@@ -564,8 +634,28 @@ window.__ModuleLoader__.load({
       { key: "consolidateIntervalMs", type: "number", min: 0, max: 604800000, step: 60000, unit: "ms", group: "advanced" },
       { key: "consolidateCosineFloor", type: "number", min: 0.5, max: 1, step: 0.01, group: "advanced" },
       { key: "consolidateMaxPairs", type: "number", min: 1, max: 50, step: 1, group: "advanced" },
+      // The dream layer has its own section: it is a different memory
+      // (documentary notes distilled from whole conversations), not a tuning
+      // knob of fact extraction, and every key here is inert until it is on.
+      { key: "dreamEnabled", type: "bool", group: "dream" },
+      { key: "dreamInjectMode", type: "enum", options: ["cue", "off"], group: "dream" },
+      { key: "dreamArchiveAfterDays", type: "number", group: "dream" },
+      { key: "dreamBackfillMaxSessions", type: "number", group: "dream" },
+      { key: "dreamBackfillMaxChars", type: "number", group: "dream" },
+      { key: "dreamFocus", type: "text", group: "dream" },
+      { key: "dreamMinChars", type: "number", min: 200, max: 400000, step: 100, group: "dream" },
+      { key: "dreamMinSessions", type: "number", min: 1, max: 50, step: 1, group: "dream" },
+      { key: "dreamEventTrigger", type: "bool", group: "dream" },
+      { key: "dreamEventMinChars", type: "number", min: 500, max: 200000, step: 500, group: "dream" },
+      { key: "dreamIdleFloorDays", type: "number", min: 1, max: 90, step: 1, group: "dream" },
+      { key: "dreamIdleFloorChars", type: "number", min: 200, max: 100000, step: 100, group: "dream" },
+      { key: "dreamMinGapMs", type: "number", min: 0, max: 604800000, step: 60000, unit: "ms", group: "dream" },
+      { key: "dreamDailyCap", type: "number", min: 1, max: 12, step: 1, group: "dream" },
+      { key: "dreamMaxChars", type: "number", min: 2000, max: 200000, step: 500, group: "dream" },
+      { key: "dreamMaxDreams", type: "number", min: 1, max: 10, step: 1, group: "dream" },
+      { key: "dreamFeedRetentionDays", type: "number", min: 0, max: 3650, step: 1, group: "dream" },
     ];
-    const GROUPS = ["master", "inject", "capture", "safety", "semantic", "extraction", "data"];
+    const GROUPS = ["master", "inject", "capture", "safety", "semantic", "extraction", "dream", "data"];
     const DEFAULTS = {
       injectDirectory: true,
       directoryBudget: 800,
@@ -615,6 +705,23 @@ window.__ModuleLoader__.load({
       consolidateIntervalMs: 21600000,
       consolidateCosineFloor: 0.85,
       consolidateMaxPairs: 8,
+      dreamEnabled: false,
+      dreamInjectMode: "cue",
+      dreamArchiveAfterDays: 90,
+      dreamBackfillMaxSessions: 50,
+      dreamBackfillMaxChars: 200000,
+      dreamFocus: "",
+      dreamMinChars: 10000,
+      dreamMinSessions: 3,
+      dreamEventTrigger: true,
+      dreamEventMinChars: 6000,
+      dreamIdleFloorDays: 7,
+      dreamIdleFloorChars: 2000,
+      dreamMinGapMs: 21600000,
+      dreamDailyCap: 2,
+      dreamMaxChars: 40000,
+      dreamMaxDreams: 5,
+      dreamFeedRetentionDays: 30,
     };
 
     /**
@@ -784,6 +891,7 @@ window.__ModuleLoader__.load({
               semantic: payload.semantic && typeof payload.semantic === "object" ? payload.semantic : null,
               extraction: payload.extraction && typeof payload.extraction === "object" ? payload.extraction : null,
               audit: payload.audit && typeof payload.audit === "object" ? payload.audit : null,
+              dream: payload.dream && typeof payload.dream === "object" ? payload.dream : null,
               review: payload.review && typeof payload.review === "object" ? payload.review : null,
               // Which credential slots are filled. Booleans and source names
               // only — the host never hands the secret back.
@@ -1898,6 +2006,10 @@ window.__ModuleLoader__.load({
       ".FM_pgTimelineMeta{margin:2px 0 0;display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dsw-alias-label-tertiary)}" +
       ".FM_pgEdit{display:flex;flex-direction:column;gap:8px}" +
       ".FM_pgInput{width:100%;box-sizing:border-box;height:34px;border-radius:9px;border:1px solid var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;padding:0 11px;outline:none}" +
+      ".FM_pgTextarea{width:100%;box-sizing:border-box;min-height:120px;border-radius:9px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;padding:9px 11px;outline:none;resize:vertical}" +
+      ".FM_pgDreamBody{margin:0;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.55;color:var(--dsw-alias-label-secondary)}" +
+      ".FM_pgDreamTab{display:flex;flex-direction:column;gap:12px}" +
+      ".FM_pgDreamList{display:flex;flex-direction:column;gap:10px}" +
       ".FM_pgEditRow{display:flex;gap:8px}" +
       ".FM_pgEntityFacts{display:flex;flex-direction:column;gap:6px}" +
       ".FM_pgEntityFact{appearance:none;font:inherit;text-align:left;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2);border-radius:10px;padding:8px 11px;display:flex;align-items:center;gap:8px;cursor:pointer;color:var(--dsw-alias-label-primary)}" +
@@ -2158,6 +2270,53 @@ window.__ModuleLoader__.load({
       "page.tab.graph": "图谱",
       "page.tab.proposals": "待审提案",
       "page.tab.conflicts": "待裁决",
+      "page.tab.dream": "梦",
+      "page.dream.focusLabel": "这次关注",
+      "page.dream.focusPlaceholder": "可留空；写一件想让它留意的事",
+      "page.dream.run": "现在整理",
+      "page.dream.running": "整理中…",
+      "page.dream.refresh": "刷新梦境",
+      "page.dream.disabled": "梦层未开启。打开「梦层」开关后，插件才会保存整段对话并在阈值满足时整理；事实库完全不受影响。",
+      "page.dream.empty": "还没有待整理的记录。",
+      "page.dream.nothing": "没有可整理的新素材。",
+      "page.dream.busy": "正在整理，请稍候。",
+      "page.dream.off": "梦层未开启，没有在采集对话。",
+      "page.dream.noModel": "没有可用的模型：先配置抽取端点，或在本会话里选一个模型。",
+      "page.dream.paused": "自动整理已暂停（连续失败三次）；手动整理成功后恢复。",
+      "page.dream.pendingTitle": "待审记录",
+      "page.dream.activeTitle": "已采纳",
+      "page.dream.noActive": "还没有采纳过记录。",
+      "page.dream.accept": "采纳",
+      "page.dream.reject": "拒绝",
+      "page.dream.edit": "编辑",
+      "page.dream.editClose": "收起",
+      "page.dream.save": "保存并采纳",
+      "page.dream.accepted": "已采纳。",
+      "page.dream.rejected": "已拒绝，这个主题不会再被提出。",
+      "page.dream.edited": "已保存并采纳。",
+      "page.dream.failed": "操作失败：{reason}",
+      "page.dream.ran": "整理完成：新增 {accepted} 条，丢弃 {dropped} 条。",
+      "page.dream.indexTitle": "主题索引",
+      "page.dream.validFrom": "自 {date}",
+      "page.dream.validRange": "{from} → {to}",
+      "page.dream.hits": "命中 {n}",
+      "page.dream.archivedTitle": "已归档",
+      "page.dream.archivedHint": "{days} 天没在对话里命中会自动归档；记录没删，随时可以恢复。",
+      "page.dream.restore": "恢复",
+      "page.dream.restored": "已恢复。",
+      "page.dream.backfill": "回填历史",
+      "page.dream.backfilling": "回填中…",
+      "page.dream.backfillHint": "把过去的会话读进待整理区（默认关闭，需要手动触发）",
+      "page.dream.backfillConfirm": "将读取最多 {n} 个旧会话（上限 {chars} 字符），把你过去的对话复制进待整理区。已经整理过的会话会跳过，可以放心重复执行。",
+      "page.dream.backfillStart": "开始回填",
+      "page.dream.backfillDone": "回填完成：{sessions} 个会话、{rows} 条消息。",
+      "page.dream.backfillNone": "没有可回填的历史会话。",
+      "page.dream.cancel": "取消",
+      "page.dream.novelty.high": "新信息",
+      "page.dream.novelty.low": "低新增",
+      "page.dream.sources": "{n} 个会话",
+      "page.dream.activeMore": "共 {n} 条，这里只列最近 {shown} 条",
+      "page.dream.unverified": "含未核实细节",
       "page.tab.queue": "抽取队列",
       "page.queue.auto": "自动刷新",
       "page.queue.autoOff": "关闭",
@@ -2409,6 +2568,53 @@ window.__ModuleLoader__.load({
       "page.tab.graph": "Graph",
       "page.tab.proposals": "Proposals",
       "page.tab.conflicts": "Conflicts",
+      "page.tab.dream": "Dreams",
+      "page.dream.focusLabel": "Focus",
+      "page.dream.focusPlaceholder": "Optional: one thing to pay attention to",
+      "page.dream.run": "Organize now",
+      "page.dream.running": "Organizing...",
+      "page.dream.refresh": "Refresh dreams",
+      "page.dream.disabled": "The dream layer is off. Switch it on to keep whole conversations and organize them when the thresholds are met; the fact library is unaffected either way.",
+      "page.dream.empty": "Nothing is waiting to be organized.",
+      "page.dream.nothing": "Nothing new to organize.",
+      "page.dream.busy": "A pass is already running.",
+      "page.dream.off": "The dream layer is off, so no conversation is being collected.",
+      "page.dream.noModel": "No model available: configure the extraction endpoint, or pick a model in this session.",
+      "page.dream.paused": "Automatic passes are paused after three failures; a successful manual run clears it.",
+      "page.dream.pendingTitle": "Waiting for review",
+      "page.dream.activeTitle": "Accepted",
+      "page.dream.noActive": "No notes accepted yet.",
+      "page.dream.accept": "Accept",
+      "page.dream.reject": "Reject",
+      "page.dream.edit": "Edit",
+      "page.dream.editClose": "Collapse",
+      "page.dream.save": "Save and accept",
+      "page.dream.accepted": "Accepted.",
+      "page.dream.rejected": "Rejected; this topic will not be proposed again.",
+      "page.dream.edited": "Saved and accepted.",
+      "page.dream.failed": "Action failed: {reason}",
+      "page.dream.ran": "Done: {accepted} kept, {dropped} dropped.",
+      "page.dream.indexTitle": "Topic index",
+      "page.dream.validFrom": "since {date}",
+      "page.dream.validRange": "{from} → {to}",
+      "page.dream.hits": "{n} hits",
+      "page.dream.archivedTitle": "Archived",
+      "page.dream.archivedHint": "Archived after {days} days without a mention; nothing was deleted and any note can be restored.",
+      "page.dream.restore": "Restore",
+      "page.dream.restored": "Restored.",
+      "page.dream.backfill": "Backfill history",
+      "page.dream.backfilling": "Backfilling…",
+      "page.dream.backfillHint": "Copy past sessions into the queue (off by default, manual only)",
+      "page.dream.backfillConfirm": "This reads up to {n} old sessions (max {chars} characters) and copies your past conversations into the queue. Sessions already collected are skipped, so it is safe to run again.",
+      "page.dream.backfillStart": "Start",
+      "page.dream.backfillDone": "Backfilled {sessions} session(s), {rows} message(s).",
+      "page.dream.backfillNone": "Nothing left to backfill.",
+      "page.dream.cancel": "Cancel",
+      "page.dream.novelty.high": "new material",
+      "page.dream.novelty.low": "mostly known",
+      "page.dream.sources": "{n} sessions",
+      "page.dream.activeMore": "{n} in total; the {shown} most recent are listed",
+      "page.dream.unverified": "unverified details",
       "page.tab.queue": "Extraction queue",
       "page.queue.auto": "Auto refresh",
       "page.queue.autoOff": "Off",
@@ -2680,6 +2886,9 @@ window.__ModuleLoader__.load({
         conflicts: { loading: false, groups: [], error: null },
         graph: { entity: "", view: "current", loading: false, data: null, error: null },
         queue: { loading: false, data: null, error: null, auto: 0, expanded: { id: "", loading: false, data: null, error: null, shown: RUN_TEXT_CHUNK } },
+        // The dream tab is a review surface: loaded on entry, after every action,
+        // and never polled — a classic pass is minutes apart.
+        dream: { loading: false, data: null, error: null, focus: "", busy: "", open: "", draftTitle: "", draftBody: "", notice: null, confirmBackfill: false },
         status: null,
         // "New since you last looked", frozen at the moment the queue was opened:
         // marking it seen clears the server-side count, so the page keeps its own
@@ -2888,6 +3097,7 @@ window.__ModuleLoader__.load({
         // as truth. This is also why "the store was wiped but the graph still had
         // nodes" happened once.
         if (tab === "graph") loadGraph(state.graph.entity || "", state.graph.view);
+        if (tab === "dream") loadDreams({ force: true });
         if (tab === "queue") {
           // Entering the tab is a user request for live state: it must not be
           // swallowed by a loading flag left over from an earlier read.
@@ -3240,6 +3450,153 @@ window.__ModuleLoader__.load({
         if (store.getSnapshot().tab === "queue") armQueueTimer(store.getSnapshot().queue.auto);
       };
 
+      // ── dream layer ─────────────────────────────────────────────────────
+      // Why a manual run did nothing, in words rather than in rule codes.
+      const REASON_NOTICE = {
+        no_material: "page.dream.nothing",
+        not_enough: "page.dream.nothing",
+        all_dropped: "page.dream.nothing",
+        busy: "page.dream.busy",
+        disabled: "page.dream.off",
+        no_model: "page.dream.noModel",
+        paused: "page.dream.paused",
+      };
+      const loadDreams = ({ force = false } = {}) => {
+        const current = store.getSnapshot().dream;
+        if (current.loading && !force) return Promise.resolve();
+        patch({ dream: { ...current, loading: true, error: null } });
+        return postJson("dreams", {}).then((payload) => {
+          const now = store.getSnapshot().dream;
+          patch({
+            dream: {
+              ...now,
+              loading: false,
+              error: payload.ok ? null : payload.error || "failed",
+              data: payload.ok ? payload : null,
+            },
+          });
+          return payload;
+        });
+      };
+
+      // A manual run ignores every threshold, so "skipped" has to say why: a
+      // silent no-op reads as a broken button.
+      const runDreamNow = () => {
+        const current = store.getSnapshot().dream;
+        if (current.busy !== "") return Promise.resolve();
+        patch({ dream: { ...current, busy: "run", notice: null } });
+        return postJson("dream", { focus: current.focus }, { timeoutMs: 240000 }).then((payload) => {
+          patch({ dream: { ...store.getSnapshot().dream, busy: "" } });
+          const reason = String(payload.reason || "");
+          const proposed = Number(payload.proposed ?? 0);
+          // A run that proposed something and kept nothing is a result, not a quiet
+          // day; only a genuinely empty feed reads as "nothing to do".
+          const ran = payload.status === "ok" || (reason === "all_dropped" && proposed > 0);
+          const code = ran ? "page.dream.ran" : REASON_NOTICE[reason] ?? "page.dream.failed";
+          patch({
+            dream: {
+              ...store.getSnapshot().dream,
+              notice: {
+                code,
+                params: ran
+                  ? { accepted: Number(payload.accepted ?? 0), dropped: Number(payload.dropped ?? 0) }
+                  : code === "page.dream.failed"
+                    ? { reason: String(payload.error || reason || payload.status || "failed") }
+                    : {},
+              },
+            },
+          });
+          return Promise.all([loadDreams({ force: true }), refreshStatus()]).then(() => payload);
+        });
+      };
+
+      const dreamMutate = (kind, body) => {
+        const current = store.getSnapshot().dream;
+        if (current.busy !== "") return Promise.resolve();
+        patch({ dream: { ...current, busy: kind, notice: null } });
+        const path = kind === "apply" ? "dream-apply" : kind === "edit" ? "dream-edit" : "dream-reject";
+        return postJson(path, body).then((payload) => {
+          const now = store.getSnapshot().dream;
+          // The routes answer ok:true as long as the request was understood, and
+          // report per-id failures beside it. A note that could not be accepted
+          // (already superseded, say) must not read as "accepted".
+          const succeeded = Array.isArray(payload.applied)
+            ? payload.applied.length > 0
+            : Array.isArray(payload.rejected)
+              ? payload.rejected.length > 0
+              : payload.ok === true;
+          const ok = payload.ok === true && succeeded;
+          const reason = payload.error || payload.failed?.[0]?.reason || "failed";
+          patch({
+            dream: {
+              ...now,
+              busy: "",
+              open: ok ? "" : now.open,
+              draftTitle: ok ? "" : now.draftTitle,
+              draftBody: ok ? "" : now.draftBody,
+              notice: ok
+                ? { code: kind === "apply" ? "page.dream.accepted" : kind === "edit" ? "page.dream.edited" : "page.dream.rejected", params: {} }
+                : { code: "page.dream.failed", params: { reason: String(reason) } },
+            },
+          });
+          return Promise.all([loadDreams({ force: true }), refreshStatus()]).then(() => payload);
+        });
+      };
+      const acceptDream = (id) => dreamMutate("apply", { ids: [String(id)] });
+      const rejectDream = (id) => dreamMutate("reject", { ids: [String(id)], reason: "rejected_in_panel" });
+      const editDream = (id) => {
+        const current = store.getSnapshot().dream;
+        return dreamMutate("edit", { id: String(id), title: current.draftTitle, body: current.draftBody });
+      };
+      const setDreamBackfill = (open) =>
+        patch({ dream: { ...store.getSnapshot().dream, confirmBackfill: Boolean(open) } });
+      // Backfill is the only action that reads conversations the layer never
+      // collected, so it asks first and reports what it actually copied.
+      const backfillDream = () => {
+        const current = store.getSnapshot().dream;
+        if (current.busy !== "") return Promise.resolve();
+        patch({ dream: { ...current, busy: "backfill", notice: null, confirmBackfill: false } });
+        return postJson("dream-backfill", { backfill: true }, { timeoutMs: 240000 }).then((payload) => {
+          const sessions = Number(payload.sessions ?? 0);
+          const notice = payload.ok
+            ? { code: sessions > 0 ? "page.dream.backfillDone" : "page.dream.backfillNone", params: { sessions, rows: Number(payload.rows ?? 0) } }
+            : { code: "page.dream.failed", params: { reason: String(payload.error || "failed") } };
+          patch({ dream: { ...store.getSnapshot().dream, busy: "", notice } });
+          return Promise.all([loadDreams({ force: true }), refreshStatus()]).then(() => payload);
+        });
+      };
+      const restoreDream = (id) => {
+        const current = store.getSnapshot().dream;
+        if (current.busy !== "") return Promise.resolve();
+        patch({ dream: { ...current, busy: "restore", notice: null } });
+        return postJson("dream-restore", { id: String(id) }).then((payload) => {
+          patch({
+            dream: {
+              ...store.getSnapshot().dream,
+              busy: "",
+              notice: payload.ok
+                ? { code: "page.dream.restored", params: {} }
+                : { code: "page.dream.failed", params: { reason: String(payload.error || "failed") } },
+            },
+          });
+          return Promise.all([loadDreams({ force: true }), refreshStatus()]).then(() => payload);
+        });
+      };
+      const setDreamFocus = (focus) => patch({ dream: { ...store.getSnapshot().dream, focus: String(focus ?? "") } });
+      const setDreamDraft = (field, value) =>
+        patch({ dream: { ...store.getSnapshot().dream, [field === "title" ? "draftTitle" : "draftBody"]: String(value ?? "") } });
+      const toggleDream = (id, title, body) => {
+        const current = store.getSnapshot().dream;
+        const open = current.open === id ? "" : String(id);
+        patch({
+          dream: {
+            ...current,
+            open,
+            draftTitle: open === "" ? "" : String(title ?? ""),
+            draftBody: open === "" ? "" : String(body ?? ""),
+          },
+        });
+      };
       const indexVectors = () => {
         patch({ op: { status: "running", kind: "vectors" } });
         return postJson("index-vectors", { ...fence() }, { timeoutMs: 120000 }).then((payload) => {
@@ -3264,6 +3621,7 @@ window.__ModuleLoader__.load({
             conflicts: { loading: false, groups: [], error: null },
             graph: { entity: "", view: store.getSnapshot().graph.view, loading: true, data: null, error: null },
             queue: { loading: true, data: null, error: null, auto: store.getSnapshot().queue.auto, expanded: { id: "", loading: false, data: null, error: null, shown: RUN_TEXT_CHUNK } },
+            dream: { loading: false, data: null, error: null, focus: "", busy: "", open: "", draftTitle: "", draftBody: "", notice: null, confirmBackfill: false },
           });
           return refreshAll()
             .then(() => loadGraph("", store.getSnapshot().graph.view))
@@ -3311,6 +3669,17 @@ window.__ModuleLoader__.load({
           stopQueuePolling,
           resumeQueuePolling,
           indexVectors,
+          loadDreams: () => loadDreams({ force: true }),
+          runDream: runDreamNow,
+          acceptDream,
+          rejectDream,
+          editDream,
+          setDreamFocus,
+          setDreamDraft,
+          toggleDream,
+          backfillDream,
+          restoreDream,
+          setDreamBackfill,
         },
       };
     }
@@ -5945,6 +6314,269 @@ window.__ModuleLoader__.load({
       });
     }
 
+    // A dream is prose, so the panel shows prose and hides the rest: the review
+    // question is "is this right?", not "which row is this?".
+    const DREAM_BODY_PREVIEW = 320;
+    function DreamPanel({ dream, t, zone, actions }) {
+      const data = dream.data;
+      const pending = Array.isArray(data?.pending) ? data.pending : [];
+      // Accepted notes come from their own query: slicing them out of a mixed page
+      // hides them as soon as enough pending rows fill it.
+      const active = Array.isArray(data?.active) ? data.active : [];
+      const notice = dream.notice ? t(dream.notice.code, dream.notice.params || {}) : "";
+      const previewOf = (text) => {
+        const body = String(text ?? "");
+        return body.length > DREAM_BODY_PREVIEW ? body.slice(0, DREAM_BODY_PREVIEW) + "…" : body;
+      };
+      const card = (row) => {
+        const open = dream.open === row.id;
+        return jsxs(
+          "div",
+          {
+            className: "FM_pgCard",
+            children: [
+              jsxs("div", {
+                className: "FM_pgCardHead",
+                children: [
+                  jsx("strong", { children: row.title || row.topicKey }),
+                  jsx("span", { className: "FM_pgPill", children: t(row.novelty === "high" ? "page.dream.novelty.high" : "page.dream.novelty.low") }),
+                  // Numbers, paths and versions the source did not contain: the one
+                  // thing a reviewer has to check before saying yes.
+                  row.unverified ? jsx("span", { className: "FM_pgPill", children: t("page.dream.unverified") }) : null,
+                  jsx("span", { className: "FM_pgCardMeta", children: shortTime(row.createdAt, zone) }),
+                  Array.isArray(row.sources) && row.sources.length > 0
+                    ? jsx("span", { className: "FM_pgCardMeta", children: t("page.dream.sources", { n: row.sources.length }) })
+                    : null,
+                ],
+              }),
+              jsx("p", { className: "FM_pgDreamBody", children: previewOf(row.body) }),
+              jsxs("div", {
+                className: "FM_pgEditRow",
+                children: [
+                  jsx("button", { className: "FM_pgPrimary", type: "button", disabled: dream.busy !== "", onClick: () => actions.acceptDream(row.id), children: t("page.dream.accept") }),
+                  jsx("button", {
+                    className: "FM_pgGhost",
+                    type: "button",
+                    disabled: dream.busy !== "",
+                    onClick: () => actions.toggleDream(row.id, row.title, row.body),
+                    children: open ? t("page.dream.editClose") : t("page.dream.edit"),
+                  }),
+                  jsx("button", { className: "FM_pgGhost FM_pgDanger", type: "button", disabled: dream.busy !== "", onClick: () => actions.rejectDream(row.id), children: t("page.dream.reject") }),
+                ],
+              }),
+              open
+                ? jsxs("div", {
+                    className: "FM_pgEdit",
+                    children: [
+                      jsx("input", {
+                        className: "FM_pgInput",
+                        value: dream.draftTitle,
+                        "aria-label": t("page.dream.edit"),
+                        onChange: (event) => actions.setDreamDraft("title", event.target.value),
+                      }),
+                      jsx("textarea", {
+                        className: "FM_pgTextarea",
+                        rows: 8,
+                        value: dream.draftBody,
+                        onChange: (event) => actions.setDreamDraft("body", event.target.value),
+                      }),
+                      jsx("button", { className: "FM_pgPrimary", type: "button", disabled: dream.busy !== "", onClick: () => actions.editDream(row.id), children: t("page.dream.save") }),
+                    ],
+                  })
+                : null,
+            ],
+          },
+          row.id,
+        );
+      };
+      const activeRow = (row) =>
+        jsxs(
+          "div",
+          {
+            className: "FM_pgQueueRow",
+            children: [
+              jsx("span", { className: "FM_pgQueueSession", children: row.title || row.topicKey }),
+              jsx("span", { className: "FM_pgQueueMeta", children: shortTime(row.updatedAt, zone) }),
+              jsx("span", { className: "FM_pgQueueMeta", children: t(row.novelty === "high" ? "page.dream.novelty.high" : "page.dream.novelty.low") }),
+              // How often a real conversation pointed at this note. Zero is the
+              // honest default, not an error.
+              jsx("span", { className: "FM_pgQueueMeta", children: t("page.dream.hits", { n: Number(row.hitCount ?? 0) }) }),
+            ],
+          },
+          row.id,
+        );
+      const archivedRow = (row) =>
+        jsxs(
+          "div",
+          {
+            className: "FM_pgQueueRow",
+            children: [
+              jsx("span", { className: "FM_pgQueueSession", children: row.title || row.topicKey }),
+              jsx("span", { className: "FM_pgQueueMeta", children: shortTime(row.updatedAt, zone) }),
+              jsx("button", {
+                className: "FM_pgGhost",
+                type: "button",
+                disabled: dream.busy !== "",
+                onClick: () => actions.restoreDream(row.id),
+                children: t("page.dream.restore"),
+              }),
+            ],
+          },
+          row.id,
+        );
+      const bar = jsxs("div", {
+        className: "FM_pgQueueBar",
+        children: [
+          jsx("span", { className: "FM_pgRailLabel", children: t("page.dream.focusLabel") }),
+          jsx("input", {
+            className: "FM_pgInput",
+            value: dream.focus,
+            placeholder: t("page.dream.focusPlaceholder"),
+            onChange: (event) => actions.setDreamFocus(event.target.value),
+          }),
+          jsx("button", {
+            className: "FM_pgPrimary",
+            type: "button",
+            disabled: dream.busy !== "" || data?.enabled === false,
+            onClick: () => actions.runDream(),
+            children: dream.busy === "run" ? t("page.dream.running") : t("page.dream.run"),
+          }),
+          jsx("button", {
+            className: "FM_pgIconBtn",
+            type: "button",
+            title: t("page.dream.refresh"),
+            "aria-label": t("page.dream.refresh"),
+            onClick: () => actions.loadDreams(),
+            children: jsx(Glyph, { kind: "refresh", size: 15 }),
+          }),
+          jsx("button", {
+            className: "FM_pgGhost",
+            type: "button",
+            disabled: dream.busy !== "" || data?.enabled === false,
+            title: t("page.dream.backfillHint"),
+            onClick: () => actions.setDreamBackfill(true),
+            children: dream.busy === "backfill" ? t("page.dream.backfilling") : t("page.dream.backfill"),
+          }),
+          data?.line ? jsx("span", { className: "FM_pgMuted", children: data.line }) : null,
+        ],
+      });
+      // Reading old conversations is the one irreversible-feeling action here, so
+      // it names its own limits before it runs.
+      const backfillConfirm = dream.confirmBackfill
+        ? jsxs("div", {
+            className: "FM_pgEditRow",
+            children: [
+              jsx("span", {
+                className: "FM_pgMuted",
+                children: t("page.dream.backfillConfirm", {
+                  n: Number(data?.backfillMaxSessions ?? 50),
+                  chars: Number(data?.backfillMaxChars ?? 200000),
+                }),
+              }),
+              jsx("button", {
+                className: "FM_pgPrimary",
+                type: "button",
+                disabled: dream.busy !== "",
+                onClick: () => actions.backfillDream(),
+                children: t("page.dream.backfillStart"),
+              }),
+              jsx("button", {
+                className: "FM_pgGhost",
+                type: "button",
+                onClick: () => actions.setDreamBackfill(false),
+                children: t("page.dream.cancel"),
+              }),
+            ],
+          })
+        : null;
+      // The topic index is a map of what exists, generated by rule from the live
+      // notes: it never summarizes and never invents a topic that is not a row.
+      const indexLines = Array.isArray(data?.index) ? data.index : [];
+      const indexBlock =
+        indexLines.length === 0
+          ? null
+          : jsxs("div", {
+              className: "FM_pgDreamList",
+              children: [
+                jsx("h3", { className: "FM_pgRailLabel", children: t("page.dream.indexTitle") }),
+                ...indexLines.map((row) =>
+                  jsxs(
+                    "div",
+                    {
+                      className: "FM_pgQueueRow",
+                      children: [
+                        jsx("span", { className: "FM_pgQueueSession", children: row.title }),
+                        jsx("span", { className: "FM_pgQueueMeta", children: row.topicKey }),
+                        jsx("span", { className: "FM_pgQueueMeta", children: t("page.dream.hits", { n: Number(row.hitCount ?? 0) }) }),
+                        row.validFrom
+                          ? jsx("span", { className: "FM_pgQueueMeta", children: t("page.dream.validFrom", { date: String(row.validFrom).slice(0, 10) }) })
+                          : null,
+                      ],
+                    },
+                    row.topicKey,
+                  ),
+                ),
+              ],
+            });
+      if (!data && dream.loading) return jsx("p", { className: "FM_pgMuted", children: t("page.loading") });
+      if (data && data.enabled === false) {
+        return jsxs("div", {
+          className: "FM_pgDreamTab",
+          children: [bar, jsx("p", { className: "FM_pgMuted", children: t("page.dream.disabled") })],
+        });
+      }
+      return jsxs("div", {
+        className: "FM_pgDreamTab",
+        children: [
+          bar,
+          dream.error ? jsx("p", { className: "FM_pgMuted", children: String(dream.error) }) : null,
+          backfillConfirm,
+          notice ? jsx("p", { className: "FM_pgMuted", children: notice }) : null,
+          // A paused layer looks exactly like an idle one; say so, and say how it
+          // is cleared, or the feature silently dies after three bad passes.
+          data?.paused ? jsx("p", { className: "FM_pgMuted", children: t("page.dream.paused") }) : null,
+          // The map comes first: what exists, then what needs a decision.
+          indexBlock,
+          jsx("h3", { className: "FM_pgRailLabel", children: t("page.dream.pendingTitle") }),
+          pending.length === 0
+            ? jsx("p", { className: "FM_pgMuted", children: t("page.dream.empty") })
+            : jsx("div", { className: "FM_pgDreamList", children: pending.map(card) }),
+          jsx("h3", { className: "FM_pgRailLabel", children: t("page.dream.activeTitle") }),
+          active.length === 0
+            ? jsx("p", { className: "FM_pgMuted", children: t("page.dream.noActive") })
+            : jsx("div", { className: "FM_pgDreamList", children: active.map(activeRow) }),
+          // One page of rows is all the route returns; a list that stops at twenty
+          // without saying so reads as "that is everything".
+          Number(data?.counts?.active ?? 0) > active.length
+            ? jsx("p", {
+                className: "FM_pgMuted",
+                children: t("page.dream.activeMore", { n: Number(data.counts.active), shown: active.length }),
+              })
+            : null,
+          Number(data?.counts?.archived ?? 0) > 0
+            ? jsxs("div", {
+                children: [
+                  jsx("h3", { className: "FM_pgRailLabel", children: t("page.dream.archivedTitle") }),
+                  jsx("p", {
+                    className: "FM_pgMuted",
+                    children: t("page.dream.archivedHint", { days: Number(data?.archiveAfterDays ?? 0) }),
+                  }),
+                  jsx("div", { className: "FM_pgDreamList", children: (Array.isArray(data?.archived) ? data.archived : []).map(archivedRow) }),
+                  Number(data?.counts?.archived ?? 0) > (Array.isArray(data?.archived) ? data.archived.length : 0)
+                    ? jsx("p", {
+                        className: "FM_pgMuted",
+                        children: t("page.dream.activeMore", {
+                          n: Number(data.counts.archived),
+                          shown: Array.isArray(data?.archived) ? data.archived.length : 0,
+                        }),
+                      })
+                    : null,
+                ],
+              })
+            : null,
+        ],
+      });
+    }
     function MemoryPage(props) {
       const state = props.useMemoryPage((snapshot) => snapshot);
       const { t, actions } = props;
@@ -5967,6 +6599,9 @@ window.__ModuleLoader__.load({
             (status?.extraction?.waiting ?? 0) +
             (status?.extraction?.retrying ?? 0),
         },
+        // Dreams waiting for review are the only human decision the layer needs;
+        // active notes are reference material and must not inflate the badge.
+        { id: "dream", label: t("page.tab.dream"), count: status?.dream?.counts?.pending ?? 0 },
       ];
       // The digest is the controller's snapshot, not a derived count: marking the
       // queue seen zeroes the server side on the very next refresh.
@@ -6484,6 +7119,7 @@ window.__ModuleLoader__.load({
                         })
                     : null,
                   state.tab === "queue" ? jsx(QueuePanel, { queue: state.queue, t, zone, actions }) : null,
+                  state.tab === "dream" ? jsx(DreamPanel, { dream: state.dream, t, zone, actions }) : null,
                 ],
               }),
               state.detail

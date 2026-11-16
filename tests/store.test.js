@@ -35,7 +35,7 @@ const fact = (overrides = {}) => ({
 test("creates schema generation 3 and reports its identity", () => {
   const { store } = freshStore();
   const meta = store.meta;
-  assert.equal(meta.schemaVersion, 11);
+  assert.equal(meta.schemaVersion, 14);
   assert.match(meta.storeId, /[0-9a-f-]{36}/);
   assert.equal(meta.generation, 0);
   assert.equal(store.integrity().ok, true);
@@ -155,7 +155,7 @@ test("a generation 1 store migrates to the current schema in place, keeping its 
   store.close();
 
   const migrated = MemoryStore.open({ dataDir: dir });
-  assert.equal(migrated.meta.schemaVersion, 11);
+  assert.equal(migrated.meta.schemaVersion, 14);
   assert.equal(migrated.stats().active, 1);
   const tables = migrated.db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('proposals','fact_vectors','calibrations')")

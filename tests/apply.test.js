@@ -152,6 +152,13 @@ test("apply registers the three tools, the context and the routes", () => {
       "/api/fact-memory/calibrate",
       "/api/fact-memory/conflicts",
       "/api/fact-memory/consolidate",
+      "/api/fact-memory/dream",
+      "/api/fact-memory/dream-apply",
+      "/api/fact-memory/dream-backfill",
+      "/api/fact-memory/dream-edit",
+      "/api/fact-memory/dream-reject",
+      "/api/fact-memory/dream-restore",
+      "/api/fact-memory/dreams",
       "/api/fact-memory/entity",
       "/api/fact-memory/export",
       "/api/fact-memory/extract",
@@ -944,6 +951,30 @@ test("the export fence refuses a directory that only looks like it is inside the
   const outside = await callRoute(ctx, "/api/fact-memory/export", { dir: join(dataDir, "..", "escape") });
   assert.equal(outside.body.ok, false);
   assert.match(outside.body.error, /数据目录/);
+  ctx.__dispose();
+});
+
+test("the dream layer is off by default, and its routes answer without touching facts", async () => {
+  const { ctx } = boot();
+  const status = await callRoute(ctx, "/api/fact-memory/status", {});
+  assert.equal(status.body.dream.enabled, false);
+  assert.equal(status.body.dream.pendingChars, 0);
+  assert.equal(typeof status.body.dream.line, "string");
+  assert.equal(status.body.dream.counts.pending, 0);
+  const list = await callRoute(ctx, "/api/fact-memory/dreams", {});
+  assert.equal(list.body.ok, true);
+  assert.deepEqual(list.body.items, []);
+  assert.deepEqual(list.body.pending, []);
+  assert.deepEqual(list.body.runs, []);
+  // The panel disables the button while the layer is off; the route must agree.
+  const run = await callRoute(ctx, "/api/fact-memory/dream", {});
+  assert.equal(run.body.status, "skipped");
+  assert.equal(run.body.reason, "disabled");
+  // An empty request is refused, never read as "all of them".
+  assert.equal((await callRoute(ctx, "/api/fact-memory/dream-apply", {})).body.ok, false);
+  assert.equal((await callRoute(ctx, "/api/fact-memory/dream-reject", {})).body.ok, false);
+  assert.equal((await callRoute(ctx, "/api/fact-memory/dream-edit", {})).body.ok, false);
+  assert.equal((await callRoute(ctx, "/api/fact-memory/status", {})).body.stats.facts, 0);
   ctx.__dispose();
 });
 

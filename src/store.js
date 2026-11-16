@@ -119,6 +119,46 @@ export function factSearchText(row) {
   return tokenText([row.entity_name ?? "", row.predicate, row.value_text, qualifiers].join(" "));
 }
 
+/** Public shape of a dream row: snake_case in SQL, camelCase outside. */
+export function rowToDream(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    topicKey: row.topic_key,
+    title: row.title,
+    body: row.body,
+    topics: safeParseArray(row.topics_json),
+    factIds: safeParseArray(row.fact_ids_json),
+    sources: (() => {
+      try {
+        const parsed = JSON.parse(row.sources_json ?? "[]");
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    })(),
+    status: row.status,
+    evidence: row.evidence,
+    novelty: row.novelty,
+    unverified: Number(row.unverified) === 1,
+    // World time: validFrom is the earliest source message, validTo the moment the
+    // claim stopped being true (set when something replaces it). Transaction time
+    // stays in createdAt/updatedAt, so both axes survive.
+    validFrom: row.valid_from ?? null,
+    validTo: row.valid_to ?? null,
+    hitCount: Number(row.hit_count ?? 0),
+    lastHitAt: row.last_hit_at ?? null,
+    supersedesId: row.supersedes_id ?? null,
+    supersededBy: row.superseded_by ?? null,
+    runId: row.run_id ?? null,
+    digest: row.digest,
+    model: row.model,
+    promptVersion: row.prompt_version,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 /** Column mapping for the JSON surface: snake_case in SQL, camelCase outside. */
 export function rowToFact(row) {
   if (!row) return null;
@@ -1459,6 +1499,14 @@ export class MemoryStore {
       "review_state",
       "dedup_runs",
       "dedup_judgements",
+      // The dream layer is content the user asked to clear, so it goes with the
+      // facts. `dream_runs` goes too: a "last run" row that outlives its own feed is
+      // exactly the stale-ledger problem the comment above describes.
+      "dreams",
+      "dream_feed",
+      "dream_feed_state",
+      "dream_rejects",
+      "dream_runs",
     ];
     this.tx(() => {
       // Count first, delete second: `facts` cascades into `fact_vectors` and
@@ -1878,6 +1926,325 @@ export class MemoryStore {
       this.bumpGeneration();
     });
     return { status: "ok", winner: this.getFact(winnerId), loser: this.getFact(loserId), movedSources: moved };
+  }
+
+  // ── dreams ─────────────────────────────────────────────────────────────
+  //
+  // A dream is prose about a stretch of conversation; a fact is one statement in a
+  // slot. The two layers never share a row: nothing below reads or writes `facts`,
+  // and the dream tests assert the fact count is identical across a full pass.
+
+  /** Append one message to the feed. Replaying the same turn is a no-op. */
+  dreamFeedAppend({ sessionId, seq, at, role, text }) {
+    const body = String(text ?? "");
+    const number = Number(seq);
+    if (!sessionId || !Number.isFinite(number) || body.trim() === "") return { inserted: false, id: 0 };
+    const result = this.db
+      .prepare("INSERT OR IGNORE INTO dream_feed (session_id, seq, at, role, chars, text) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(String(sessionId), number, at || nowIso(), role === "user" ? "user" : "assistant", body.length, body);
+    return { inserted: Number(result.changes) > 0, id: Number(result.lastInsertRowid ?? 0) };
+  }
+
+  /** Oldest-first feed window after a cursor. */
+  dreamFeedRows({ afterId = 0, limit = 4000 } = {}) {
+    return this.db
+      .prepare("SELECT id, session_id, seq, at, role, chars, text FROM dream_feed WHERE id > ? ORDER BY id ASC LIMIT ?")
+      .all(Number(afterId) || 0, clampInt(limit, 1, 20000, 4000));
+  }
+
+  /** What is waiting after the cursor: characters, messages, sessions. */
+  dreamFeedStats({ afterId = 0 } = {}) {
+    const row = this.db
+      .prepare("SELECT COALESCE(SUM(chars), 0) AS chars, COUNT(*) AS messages, COUNT(DISTINCT session_id) AS sessions, COALESCE(MAX(id), 0) AS maxId FROM dream_feed WHERE id > ?")
+      .get(Number(afterId) || 0);
+    return {
+      chars: Number(row?.chars ?? 0),
+      messages: Number(row?.messages ?? 0),
+      sessions: Number(row?.sessions ?? 0),
+      maxId: Number(row?.maxId ?? 0),
+    };
+  }
+
+  /**Per-session view of the waiting window, carrying the user-message count T2 needs. */
+  dreamFeedSessions({ afterId = 0, limit = 200 } = {}) {
+    return this.db
+      .prepare("SELECT session_id AS sessionId, COUNT(*) AS messages, SUM(CASE WHEN role = 'user' THEN 1 ELSE 0 END) AS userMessages, COALESCE(SUM(chars), 0) AS chars, MIN(at) AS firstAt, MAX(at) AS lastAt, MIN(id) AS minId, MAX(id) AS maxId FROM dream_feed WHERE id > ? GROUP BY session_id ORDER BY minId ASC LIMIT ?")
+      .all(Number(afterId) || 0, clampInt(limit, 1, 1000, 200));
+  }
+
+  /** Feed retention. The cursor is untouched: pruning never un-consumes material. */
+  dreamFeedPrune({ before = null } = {}) {
+    const cut = before || new Date(Date.now() - 30 * 86400000).toISOString();
+    const result = this.db.prepare("DELETE FROM dream_feed WHERE at < ?").run(cut);
+    // The per-session mark deliberately outlives the rows: it is one small row per
+    // session, and expiring it would make a session resumed after a long pause
+    // skip the turn it resumed on.
+    return { deleted: Number(result.changes ?? 0), before: cut };
+  }
+
+  /**
+   * Remove exactly the rows a pass consumed. A partial take (char budget hit) must
+   * leave the remainder behind, which is why this takes ids instead of a range.
+   */
+  dreamFeedDelete({ ids = [] } = {}) {
+    const list = [...new Set((Array.isArray(ids) ? ids : []).map((id) => Number(id)).filter((id) => Number.isFinite(id)))];
+    if (list.length === 0) return { deleted: 0 };
+    let deleted = 0;
+    this.tx(() => {
+      for (let index = 0; index < list.length; index += 400) {
+        const chunk = list.slice(index, index + 400);
+        const sql = "DELETE FROM dream_feed WHERE id IN (" + chunk.map(() => "?").join(",") + ")";
+        deleted += Number(this.db.prepare(sql).run(...chunk).changes ?? 0);
+      }
+    });
+    return { deleted };
+  }
+
+  /**
+   * The collection high-water mark for one session. Kept outside the feed on
+   * purpose: a consumed row is deleted, so MAX(seq) over an emptied session is -1
+   * and a restart would re-collect turns another process already summarized.
+   */
+  dreamFeedStateGet(sessionId) {
+    const row = this.db.prepare("SELECT last_seq FROM dream_feed_state WHERE session_id = ?").get(String(sessionId));
+    return Number(row?.last_seq ?? -1);
+  }
+
+  dreamFeedStateSet({ sessionId, lastSeq, at = nowIso() }) {
+    const number = Number(lastSeq);
+    if (!sessionId || !Number.isFinite(number)) return { status: "refused" };
+    this.db
+      .prepare("INSERT INTO dream_feed_state (session_id, last_seq, updated_at) VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET last_seq = excluded.last_seq, updated_at = excluded.updated_at")
+      .run(String(sessionId), number, at);
+    return { status: "ok" };
+  }
+
+  /**
+   * Record one dream. The digest is sha256(topic_key + body), so the same prose for
+   * the same topic written twice is the same row — idempotence by content, not by
+   * clock, which is what lets a re-run be safe.
+   */
+  dreamCreate({
+    topicKey,
+    title = "",
+    body,
+    topics = [],
+    sources = [],
+    evidence = "inferred",
+    novelty = "low",
+    unverified = false,
+    supersedesId = null,
+    runId = null,
+    model = "",
+    promptVersion = "v1",
+    status = "pending",
+    // World time: when the earliest source message behind this note was said.
+    validFrom = null,
+    at = nowIso(),
+  } = {}) {
+    const key = String(topicKey ?? "").trim();
+    const text = String(body ?? "").trim();
+    if (key === "" || text === "") return { status: "refused", reason: "empty" };
+    const digest = sha256(key + "\u0000" + text);
+    const existing = this.db.prepare("SELECT id FROM dreams WHERE topic_key = ? AND digest = ?").get(key, digest);
+    if (existing) return { status: "duplicate", id: existing.id, digest };
+    const id = uuid();
+    this.tx(() => {
+      this.db
+        // fact_ids_json is reserved for a later pass that can prove which facts a
+        // note summarizes; the model has no such list today, so nothing writes it.
+        .prepare("INSERT INTO dreams (id, topic_key, title, body, topics_json, sources_json, status, evidence, novelty, unverified, supersedes_id, run_id, digest, model, prompt_version, valid_from, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(id, key, String(title ?? "").trim().slice(0, 200), text, json(topics), json(sources), status, evidence === "user_stated" ? "user_stated" : "inferred", novelty === "high" ? "high" : "low", unverified ? 1 : 0, supersedesId, runId, digest, String(model ?? ""), String(promptVersion ?? "v1"), validFrom === null ? null : String(validFrom), at, at);
+    });
+    return { status: "created", id, digest };
+  }
+
+  dream(id) {
+    return rowToDream(this.db.prepare("SELECT * FROM dreams WHERE id = ?").get(id));
+  }
+
+  /** Query dreams. `status` accepts one status or a list; null means every status. */
+  dreams({ status = null, topicKey = "", limit = 50, offset = 0, order = "recent" } = {}) {
+    const where = [];
+    const params = [];
+    if (Array.isArray(status) && status.length > 0) {
+      where.push("status IN (" + status.map(() => "?").join(",") + ")");
+      params.push(...status);
+    } else if (typeof status === "string" && status !== "") {
+      where.push("status = ?");
+      params.push(status);
+    }
+    if (topicKey) {
+      where.push("topic_key = ?");
+      params.push(topicKey);
+    }
+    const sort =
+      order === "heat"
+        ? " ORDER BY hit_count DESC, COALESCE(last_hit_at, updated_at) DESC, created_at DESC"
+        : " ORDER BY created_at DESC";
+    const sql = "SELECT * FROM dreams" + (where.length > 0 ? " WHERE " + where.join(" AND ") : "") + sort + " LIMIT ? OFFSET ?";
+    return this.db.prepare(sql).all(...params, clampInt(limit, 1, 500, 50), Math.max(0, Number(offset) || 0)).map(rowToDream);
+  }
+
+  dreamPending({ limit = 50 } = {}) {
+    return this.dreams({ status: "pending", limit, offset: 0 });
+  }
+
+  /** Topic keys already covered — the orient pass only needs titles. */
+  dreamIndex({ limit = 40 } = {}) {
+    return this.db
+      // Hottest first: a topic the conversation keeps coming back to is the one
+      // the model most needs to avoid re-proposing.
+      .prepare("SELECT topic_key AS topicKey, title, status FROM dreams WHERE status IN ('active','pending') ORDER BY hit_count DESC, updated_at DESC LIMIT ?")
+      .all(clampInt(limit, 1, 200, 40));
+  }
+
+  /** Accept a dream, optionally with edited prose. A rewritten body re-derives its digest. */
+  dreamApply({ id, title = null, body = null, at = nowIso() }) {
+    const row = this.db.prepare("SELECT * FROM dreams WHERE id = ?").get(id);
+    if (!row) return { status: "not_found" };
+    if (row.status === "active") return { status: "already_active", dream: rowToDream(row) };
+    if (row.status !== "pending") return { status: "refused", reason: "status_" + row.status };
+    const nextBody = String(body ?? row.body).trim();
+    if (nextBody === "") return { status: "refused", reason: "empty_body" };
+    const nextTitle = String(title ?? row.title).trim().slice(0, 200);
+    const digest = sha256(row.topic_key + "\u0000" + nextBody);
+    this.tx(() => {
+      this.db.prepare("UPDATE dreams SET title = ?, body = ?, digest = ?, status = 'active', updated_at = ? WHERE id = ?").run(nextTitle, nextBody, digest, at, id);
+      // The supersede link is written when the draft is created, but until someone
+      // says yes to the new text the old note is still the live version. Accepting
+      // is what actually closes it — otherwise both stay active on one topic.
+      if (row.supersedes_id) this.dreamSupersede({ id: row.supersedes_id, byId: id, at });
+    });
+    return { status: "ok", dream: this.dream(id) };
+  }
+
+  /** Reject a dream and remember the topic, so the next pass stops re-proposing it. */
+  dreamReject({ id, reason = "", at = nowIso() }) {
+    const row = this.db.prepare("SELECT * FROM dreams WHERE id = ?").get(id);
+    if (!row) return { status: "not_found" };
+    if (row.status === "rejected") return { status: "already_rejected" };
+    this.tx(() => {
+      this.db.prepare("UPDATE dreams SET status = 'rejected', updated_at = ? WHERE id = ?").run(at, id);
+      this.db
+        .prepare("INSERT INTO dream_rejects (topic_key, reason, at) VALUES (?, ?, ?) ON CONFLICT(topic_key) DO UPDATE SET reason = excluded.reason, at = excluded.at")
+        .run(row.topic_key, String(reason ?? "").slice(0, 400), at);
+    });
+    return { status: "ok" };
+  }
+
+  dreamRejects({ limit = 20 } = {}) {
+    return this.db
+      .prepare("SELECT topic_key AS topicKey, reason, at FROM dream_rejects ORDER BY at DESC LIMIT ?")
+      .all(clampInt(limit, 1, 200, 20));
+  }
+
+  /** Close an active dream by pointing it at the one that replaces it. Nothing is deleted. */
+  dreamSupersede({ id, byId, at = nowIso() }) {
+    // World time closes when the replacement statement was made, not when someone
+    // pressed accept: the old claim stopped being true when the new one was said.
+    const old = this.db.prepare("SELECT valid_from, created_at FROM dreams WHERE id = ?").get(id);
+    const next = this.db.prepare("SELECT valid_from FROM dreams WHERE id = ?").get(byId);
+    const from = String(old?.valid_from ?? old?.created_at ?? "");
+    const to = String(next?.valid_from ?? "") || String(at);
+    const endsAt = from !== "" && to < from ? from : to;
+    const result = this.db
+      .prepare("UPDATE dreams SET status = 'superseded', superseded_by = ?, valid_to = COALESCE(valid_to, ?), updated_at = ? WHERE id = ? AND status IN ('active','pending')")
+      .run(byId, endsAt, at, id);
+    if (Number(result.changes) > 0) {
+      this.db.prepare("UPDATE dreams SET supersedes_id = COALESCE(supersedes_id, ?), updated_at = ? WHERE id = ?").run(id, at, byId);
+    }
+    return { status: Number(result.changes) > 0 ? "ok" : "no_change" };
+  }
+
+  dreamStats() {
+    const one = (sql) => Number(this.db.prepare(sql).get()?.count ?? 0);
+    return {
+      pending: one("SELECT COUNT(*) AS count FROM dreams WHERE status = 'pending'"),
+      active: one("SELECT COUNT(*) AS count FROM dreams WHERE status = 'active'"),
+      superseded: one("SELECT COUNT(*) AS count FROM dreams WHERE status = 'superseded'"),
+      rejected: one("SELECT COUNT(*) AS count FROM dreams WHERE status = 'rejected'"),
+      archived: one("SELECT COUNT(*) AS count FROM dreams WHERE status = 'archived'"),
+      feedRows: one("SELECT COUNT(*) AS count FROM dream_feed"),
+      rejects: one("SELECT COUNT(*) AS count FROM dream_rejects"),
+    };
+  }
+
+  /**
+   * Record that a note's topic actually came up. The only real heat signal this
+   * layer has: not "how often did we reread it", but "did a conversation touch it".
+   */
+  dreamTouch({ ids = [], at = nowIso() } = {}) {
+    const list = (Array.isArray(ids) ? ids : []).map((id) => String(id ?? "")).filter((id) => id !== "");
+    if (list.length === 0) return { touched: 0 };
+    let touched = 0;
+    this.tx(() => {
+      const statement = this.db.prepare("UPDATE dreams SET hit_count = hit_count + 1, last_hit_at = ? WHERE id = ? AND status = 'active'");
+      for (const id of list) touched += Number(statement.run(at, id).changes) || 0;
+    });
+    return { touched };
+  }
+
+  /**
+   * Archive notes nobody has touched since the given moment. Archived is a status,
+   * not a delete: the row, its sources and its timeline stay, and a restore puts it
+   * back. The rule is last real activity, never a made-up decay curve.
+   */
+  dreamArchiveStale({ before, at = nowIso() } = {}) {
+    const mark = String(before ?? "");
+    if (mark === "") return { archived: 0 };
+    const result = this.db
+      .prepare("UPDATE dreams SET status = 'archived', updated_at = ? WHERE status = 'active' AND COALESCE(last_hit_at, updated_at) < ?")
+      .run(at, mark);
+    return { archived: Number(result.changes) || 0 };
+  }
+
+  /** Put an archived note back into service. */
+  dreamRestore({ id, at = nowIso() } = {}) {
+    const row = this.db.prepare("SELECT status FROM dreams WHERE id = ?").get(id);
+    if (!row) return { status: "not_found" };
+    if (row.status !== "archived") return { status: "refused", reason: "status_" + row.status };
+    // updated_at moves to now, or the same archive rule would hide it again tonight.
+    this.db.prepare("UPDATE dreams SET status = 'active', updated_at = ? WHERE id = ?").run(at, id);
+    return { status: "ok", dream: this.dream(id) };
+  }
+
+  recordDreamRun({
+    id = uuid(),
+    status = "ok",
+    reason = "",
+    trigger = "",
+    focus = "",
+    sessionIds = [],
+    chars = 0,
+    messages = 0,
+    proposed = 0,
+    accepted = 0,
+    dropped = 0,
+    cursorId = 0,
+    model = "",
+    durationMs = 0,
+    error = "",
+    at = nowIso(),
+  } = {}) {
+    this.db
+      .prepare("INSERT INTO dream_runs (id, status, reason, trigger, focus, session_ids_json, chars, messages, proposed, accepted, dropped, cursor_id, model, duration_ms, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(id, status, reason, trigger, String(focus ?? "").slice(0, 400), json(sessionIds), Number(chars) || 0, Number(messages) || 0, Number(proposed) || 0, Number(accepted) || 0, Number(dropped) || 0, Number(cursorId) || 0, String(model ?? ""), Number(durationMs) || 0, String(error ?? "").slice(0, 500), at);
+    return id;
+  }
+
+  recentDreamRuns({ limit = 10 } = {}) {
+    return this.db
+      // Two runs inside one millisecond share a timestamp; insertion order is the
+      // only honest tiebreaker, and the first row is what the panel calls "last".
+      .prepare("SELECT * FROM dream_runs ORDER BY created_at DESC, rowid DESC LIMIT ?")
+      .all(clampInt(limit, 1, 100, 10))
+      .map((row) => ({
+        ...row,
+        sessionIds: safeParseArray(row.session_ids_json),
+        cursorId: Number(row.cursor_id),
+        durationMs: Number(row.duration_ms),
+      }));
   }
 
   stats() {

@@ -70,3 +70,68 @@ export function messageText(message) {
     .map((block) => block.text)
     .join("\n");
 }
+
+const CJK_RUN = /[\u3400-\u9fff]{2,}/g;
+
+/** Chinese bigrams: a long title is named by a word inside it, not verbatim. */
+const cjkBigrams = (text) => {
+  const grams = new Set();
+  for (const run of String(text ?? "").match(CJK_RUN) ?? []) {
+    for (let index = 0; index + 1 < run.length; index += 1) grams.add(run.slice(index, index + 2));
+  }
+  return [...grams];
+};
+
+/**
+ * The "cue" injection mode, one line and no body.
+ *
+ * A dream is a documentary copy of a conversation and `memory_*` search stays
+ * facts-only, so a note the model cannot search must not be advertised as
+ * searchable. The cue therefore only says that a related note exists and names
+ * its topic: enough for the person to know where to look, nothing the model can
+ * mistake for a fact.
+ */
+export function dreamCue(dreams, text) {
+  return dreamCueText(dreamCueHits(dreams, text));
+}
+
+/**
+ * Which notes the message is actually about. Kept separate from the sentence
+ * because the layer records a hit per match, and "the cue appeared" is the only
+ * evidence this feature has that a topic is still alive.
+ */
+export function dreamCueHits(dreams, text) {
+  const said = String(text ?? "").normalize("NFKC").toLowerCase();
+  if (said.trim() === "") return [];
+  const hits = [];
+  for (const dream of Array.isArray(dreams) ? dreams : []) {
+    const title = String(dream?.title ?? "").trim();
+    const key = String(dream?.topicKey ?? "").trim();
+    const topics = Array.isArray(dream?.topics) ? dream.topics.map((topic) => String(topic)) : [];
+    const probes = [title, ...topics, key.replace(/-/g, " ")]
+      .map((probe) => probe.trim().toLowerCase())
+      .filter((probe) => probe.length >= 2);
+    let hit = probes.some((probe) => said.includes(probe));
+    if (!hit && title.length >= 3) {
+      const grams = cjkBigrams(title.toLowerCase());
+      if (grams.length > 0) {
+        const found = grams.filter((gram) => said.includes(gram)).length;
+        hit = found / grams.length >= 0.5;
+      }
+    }
+    if (hit) hits.push(dream);
+  }
+  return hits;
+}
+
+export function dreamCueText(hits) {
+  if (!Array.isArray(hits) || hits.length === 0) return "";
+  const first = hits[0];
+  const label = String(first?.title ?? "").trim() || String(first?.topicKey ?? "").trim();
+  if (label === "") return "";
+  const extra = hits.length > 1 ? "（另有 " + (hits.length - 1) + " 条同主题）" : "";
+  return (
+    "【梦境】这次话题在整理记录里有一篇「" + label + "」" + extra +
+    "，需要细节时可在「记忆 → 梦」页签查看。"
+  );
+}

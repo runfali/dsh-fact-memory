@@ -67,7 +67,7 @@ function effortCandidates(thinking, cacheKey, reasoningEffort) {
   return [cached, ...all.filter((effort) => effort !== cached)];
 }
 
-export async function streamHostText(llm, { provider, model, reasoningEffort, thinking, system, prompt, signal, timeoutMs = DEFAULT_TIMEOUT_MS }) {
+export async function streamHostText(llm, { provider, model, reasoningEffort, thinking, system, prompt, signal, timeoutMs = DEFAULT_TIMEOUT_MS, maxTokens = 2048 }) {
   if (!llm || typeof llm.stream !== "function") throw Object.assign(new Error("host model runtime is unavailable"), { code: "host_unavailable" });
   const guard = timeoutSignal(signal, timeoutMs);
   const cacheKey = `${provider}\u0000${model}`;
@@ -83,7 +83,7 @@ export async function streamHostText(llm, { provider, model, reasoningEffort, th
           system,
           messages: [{ role: "user", content: [{ type: "text", text: prompt }] }],
           temperature: 0,
-          maxTokens: 2048,
+          maxTokens,
           signal: guard.signal,
           purpose: "dsh-fact-memory:extract",
         });
@@ -152,7 +152,7 @@ function textFromSse(raw) {
  * is requested first and dropped once if the endpoint rejects it; the local
  * schema check is the authority either way.
  */
-export async function callCustomText(provider, { system, prompt, signal, timeoutMs = DEFAULT_TIMEOUT_MS, jsonMode = true, thinking = false, schema = null }) {
+export async function callCustomText(provider, { system, prompt, signal, timeoutMs = DEFAULT_TIMEOUT_MS, jsonMode = true, thinking = false, schema = null, maxTokens = 2048 }) {
   const baseUrl = String(provider.baseUrl ?? "").replace(/\/+$/, "");
   const model = String(provider.model ?? "").trim();
   if (baseUrl === "" || model === "") throw Object.assign(new Error("custom model is not configured"), { code: "custom_unconfigured" });
@@ -187,7 +187,7 @@ export async function callCustomText(provider, { system, prompt, signal, timeout
       body: JSON.stringify({
         model,
         temperature: 0,
-        max_tokens: 2048,
+        max_tokens: maxTokens,
         messages: [
           { role: "system", content: system },
           { role: "user", content: prompt },
